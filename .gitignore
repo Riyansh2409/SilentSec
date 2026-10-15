@@ -1,27 +1,22 @@
-@'
-# Secrets and environment configuration
+
 .env
 .env.*
 !.env.example
 
-# Python
-__pycache__/
-*.py[cod]
 .venv/
 venv/
+__pycache__/
+*.py[cod]
 .pytest_cache/
 .ruff_cache/
 .coverage
 htmlcov/
 
-# Local databases and uploaded code
 data/
-*.db
 uploads/
+*.db
 
-# IDE and OS
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
-'@ | Set-Content -Encoding utf8 .gitignore
