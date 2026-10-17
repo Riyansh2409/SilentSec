@@ -1,4 +1,3 @@
-
 from collections.abc import Callable
 from pathlib import Path
 from time import perf_counter
@@ -7,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from silentsec.languages import detect_languages
 from silentsec.schemas import Finding
+from silentsec.scoring import SecurityDebtReport, score_findings
 
 from .bandit_runner import run_bandit
 from .gitleaks_runner import run_gitleaks
@@ -24,6 +24,8 @@ class RepositoryScanResult(BaseModel):
     findings: list[Finding] = Field(default_factory=list)
     duration_seconds: float = Field(ge=0)
     errors: list[str] = Field(default_factory=list)
+    security_debt: SecurityDebtReport | None = None
+    security_debt_complete: bool = False
 
 
 ScannerRunner = Callable[..., ScannerRunResult]
@@ -67,7 +69,8 @@ def _overall_status(
     successful = [
         result
         for result in results
-        if result.status in {
+        if result.status
+        in {
             ScannerStatus.SUCCESS,
             ScannerStatus.PARTIAL,
         }
@@ -100,7 +103,7 @@ def scan_repository(
     repo_path: str | Path,
     timeout_seconds: int = 180,
 ) -> RepositoryScanResult:
-    """Run Semgrep, Bandit, and Gitleaks on a repository."""
+    """Run scanners and calculate an explainable security-debt report."""
 
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be positive")
@@ -142,8 +145,8 @@ def scan_repository(
         for name, runner in scanner_specs
     ]
 
-    # Preserve findings from every scanner. Cross-tool deduplication and
-    # correlation will be handled by a separate module.
+    # Preserve raw findings from all scanners. The scoring engine independently
+    # deduplicates matching fingerprints for its repository-level report.
     findings = [
         finding
         for result in results
@@ -156,12 +159,17 @@ def scan_repository(
         for error in result.errors
     ]
 
+    overall_status = _overall_status(results)
+    debt_report = score_findings(findings)
+
     return RepositoryScanResult(
         repo_path=str(root),
         languages=language_report.languages,
-        status=_overall_status(results),
+        status=overall_status,
         scanners=results,
         findings=findings,
         duration_seconds=round(perf_counter() - started, 3),
         errors=errors,
+        security_debt=debt_report,
+        security_debt_complete=overall_status == ScannerStatus.SUCCESS,
     )
