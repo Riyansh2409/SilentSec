@@ -171,5 +171,8 @@ def scan_repository(
         duration_seconds=round(perf_counter() - started, 3),
         errors=errors,
         security_debt=debt_report,
-        security_debt_complete=overall_status == ScannerStatus.SUCCESS,
+        security_debt_complete=all(
+             result.status == ScannerStatus.SUCCESS
+             for result in results
+                      ),
     )

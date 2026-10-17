@@ -154,6 +154,8 @@ def test_skipped_bandit_is_not_a_failure(tmp_path: Path):
         report = scan_repository(tmp_path)
 
     assert report.status == ScannerStatus.SUCCESS
+    assert report.status == ScannerStatus.SUCCESS
+    assert report.security_debt_complete is False
 
 
 def test_scoring_report_contains_finding_score(tmp_path: Path):
