@@ -20,3 +20,6 @@ uploads/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Generated Python packaging metadata
+*.egg-info/

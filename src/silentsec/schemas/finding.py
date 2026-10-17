@@ -17,7 +17,7 @@ class FindingCategory(str, Enum):
     SECURITY = "security"
     ARCHITECTURE = "architecture"
     MAINTAINABILITY = "maintainability"
-    SECRET = "secret"
+    SECRET = "secret"  # nosec B105: category label, not a credential
 
 
 class FindingStatus(str, Enum):

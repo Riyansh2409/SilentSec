@@ -15,7 +15,11 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
-    "ruff>=0.5" 
+    "ruff>=0.5"
+]
+scanners = [
+    "semgrep>=1.100,<2",
+    "bandit>=1.7,<2"
 ]
 
 [tool.setuptools.packages.find]
