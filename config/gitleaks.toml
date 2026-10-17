@@ -1,0 +1,18 @@
+
+title = "SilentSec Gitleaks Configuration"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Exclude virtual environments and generated dependency directories"
+
+paths = [
+    '''(^|/)\.venv/.*''',
+    '''(^|/)venv/.*''',
+    '''(^|/)env/.*''',
+    '''(^|/)node_modules/.*''',
+    '''(^|/)dist/.*''',
+    '''(^|/)build/.*''',
+    '''(^|/)[^/]+\.egg-info/.*'''
+]
