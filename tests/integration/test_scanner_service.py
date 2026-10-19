@@ -10,6 +10,7 @@ from silentsec.schemas.finding import (
     Severity,
 )
 from silentsec.scoring import RiskLevel
+from silentsec.triage import TriagePriority, TriageResult
 
 
 def make_finding(
@@ -269,3 +270,204 @@ def test_partial_scan_still_returns_available_debt_report(
     assert report.security_debt.score == 7.2
     assert report.security_debt_complete is False
     assert any("simulated failure" in error for error in report.errors)
+
+
+
+def make_triage_result(finding: Finding) -> TriageResult:
+    return TriageResult(
+        finding_id=finding.finding_id,
+        fingerprint=finding.fingerprint,
+        priority=TriagePriority.HIGH,
+        summary="Potential security issue requiring review.",
+        rationale="The scanner reported a potentially unsafe operation.",
+        remediation_steps=["Review the operation and validate its inputs."],
+        evidence=["A scanner finding identifies the affected source location."],
+        limitations=["Exploitability has not been independently verified."],
+        requires_human_review=True,
+    )
+
+
+def mock_scanners(findings: list[Finding]):
+    """Patch all scanners to return controlled findings."""
+    return (
+        patch(
+            "silentsec.scanners.scanner_service.run_semgrep",
+            return_value=make_result("semgrep", findings=findings),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.run_bandit",
+            return_value=make_result("bandit"),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.run_gitleaks",
+            return_value=make_result("gitleaks"),
+        ),
+    )
+
+
+def test_ai_triage_receives_source_context(tmp_path: Path):
+    source_file = tmp_path / "src" / "app.py"
+    source_file.parent.mkdir()
+    source_file.write_text(
+        "\n".join(f"# line {number}" for number in range(1, 16)),
+        encoding="utf-8",
+    )
+    finding = make_finding()
+    received_contexts: list[str] = []
+
+    class FakeRouter:
+        def triage(self, *, finding: Finding, context: str = "") -> TriageResult:
+            received_contexts.append(context)
+            return make_triage_result(finding)
+
+    with (
+        patch(
+            "silentsec.scanners.scanner_service.run_semgrep",
+            return_value=make_result("semgrep", findings=[finding]),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.run_bandit",
+            return_value=make_result("bandit"),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.run_gitleaks",
+            return_value=make_result("gitleaks"),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.build_default_router",
+            return_value=FakeRouter(),
+        ),
+    ):
+        report = scan_repository(tmp_path, enable_ai_triage=True)
+
+    assert report.triage_attempted is True
+    assert report.triage_complete is True
+    assert len(report.triage_results) == 1
+    assert len(received_contexts) == 1
+    assert "line 10" in received_contexts[0]
+
+def test_ai_triage_failure_does_not_stop_remaining_findings(
+    tmp_path: Path,
+):
+    first = make_finding(fingerprint="first-finding")
+    second = make_finding(fingerprint="second-finding")
+    calls: list[str] = []
+
+    class FlakyRouter:
+        def triage(
+            self, *, finding: Finding, context: str = ""
+        ) -> TriageResult:
+            calls.append(finding.fingerprint)
+            if finding.fingerprint == "first-finding":
+                raise RuntimeError("simulated provider failure")
+            return make_triage_result(finding)
+
+    with (
+        patch(
+            "silentsec.scanners.scanner_service.run_semgrep",
+            return_value=make_result(
+                "semgrep", findings=[first, second]
+            ),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.run_bandit",
+            return_value=make_result("bandit"),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.run_gitleaks",
+            return_value=make_result("gitleaks"),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.build_default_router",
+            return_value=FlakyRouter(),
+        ),
+    ):
+        report = scan_repository(tmp_path, enable_ai_triage=True)
+
+    assert len(calls) == 2
+    assert len(report.triage_results) == 1
+    assert report.triage_results[0].fingerprint == "second-finding"
+    assert report.triage_complete is False
+    assert report.triage_errors
+
+
+def test_ai_triage_limit_is_reported(tmp_path: Path):
+    findings = [
+        make_finding(fingerprint="low-finding", severity=Severity.LOW),
+        make_finding(fingerprint="high-finding", severity=Severity.HIGH),
+    ]
+
+    class FakeRouter:
+        def triage(
+            self, *, finding: Finding, context: str = ""
+        ) -> TriageResult:
+            return make_triage_result(finding)
+
+    with (
+        patch(
+            "silentsec.scanners.scanner_service.run_semgrep",
+            return_value=make_result("semgrep", findings=findings),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.run_bandit",
+            return_value=make_result("bandit"),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.run_gitleaks",
+            return_value=make_result("gitleaks"),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.build_default_router",
+            return_value=FakeRouter(),
+        ),
+    ):
+        report = scan_repository(
+            tmp_path,
+            enable_ai_triage=True,
+            max_ai_triage_findings=1,
+        )
+
+    assert len(report.triage_results) == 1
+    assert report.triage_results[0].fingerprint == "high-finding"
+    assert report.triage_complete is False
+    assert any(
+        "1 findings were skipped" in error
+        for error in report.triage_errors
+    )
+
+
+def test_ai_provider_failure_preserves_security_debt_score(
+    tmp_path: Path,
+):
+    finding = make_finding(
+        fingerprint="score-preservation",
+        severity=Severity.MEDIUM,
+        confidence=0.8,
+    )
+
+    with (
+        patch(
+            "silentsec.scanners.scanner_service.run_semgrep",
+            return_value=make_result("semgrep", findings=[finding]),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.run_bandit",
+            return_value=make_result("bandit"),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.run_gitleaks",
+            return_value=make_result("gitleaks"),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.build_default_router",
+            side_effect=RuntimeError("simulated provider failure"),
+        ),
+    ):
+        report = scan_repository(tmp_path, enable_ai_triage=True)
+
+    assert report.security_debt is not None
+    assert report.security_debt.score == 7.2
+    assert report.security_debt_complete is True
+    assert report.triage_attempted is True
+    assert report.triage_complete is False
+    assert report.triage_errors

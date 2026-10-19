@@ -1,12 +1,21 @@
+
+"""Orchestrate repository scanners, security-debt scoring, and AI triage."""
+
 from collections.abc import Callable
 from pathlib import Path
 from time import perf_counter
 
 from pydantic import BaseModel, Field
 
+from silentsec.context import build_source_context
 from silentsec.languages import detect_languages
 from silentsec.schemas import Finding
 from silentsec.scoring import SecurityDebtReport, score_findings
+from silentsec.triage import (
+    TriageEngine,
+    TriageResult,
+    build_default_router,
+)
 
 from .bandit_runner import run_bandit
 from .gitleaks_runner import run_gitleaks
@@ -15,7 +24,7 @@ from .semgrep_runner import run_semgrep
 
 
 class RepositoryScanResult(BaseModel):
-    """Combined result of all scanner runs for one repository."""
+    """Combined result of scanner runs for one repository."""
 
     repo_path: str
     languages: list[str] = Field(default_factory=list)
@@ -26,6 +35,10 @@ class RepositoryScanResult(BaseModel):
     errors: list[str] = Field(default_factory=list)
     security_debt: SecurityDebtReport | None = None
     security_debt_complete: bool = False
+    triage_results: list[TriageResult] = Field(default_factory=list)
+    triage_attempted: bool = False
+    triage_complete: bool = False
+    triage_errors: list[str] = Field(default_factory=list)
 
 
 ScannerRunner = Callable[..., ScannerRunResult]
@@ -37,7 +50,7 @@ def _run_safely(
     root: Path,
     timeout_seconds: int,
 ) -> ScannerRunResult:
-    """Run one scanner without allowing its exception to abort others."""
+    """Run a scanner without allowing its exception to abort other scanners."""
 
     started = perf_counter()
 
@@ -47,7 +60,7 @@ def _run_safely(
             timeout_seconds=timeout_seconds,
         )
     except Exception as exc:  # noqa: BLE001
-        # Do not expose raw exception text, which might contain sensitive data.
+        # Avoid exposing raw exception text, which may contain sensitive data.
         return ScannerRunResult(
             scanner=scanner_name,
             status=ScannerStatus.FAILED,
@@ -102,11 +115,17 @@ def _overall_status(
 def scan_repository(
     repo_path: str | Path,
     timeout_seconds: int = 180,
+    *,
+    enable_ai_triage: bool = False,
+    max_ai_triage_findings: int = 20,
 ) -> RepositoryScanResult:
-    """Run scanners and calculate an explainable security-debt report."""
+    """Scan a repository, score security debt, and optionally triage findings."""
 
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be positive")
+
+    if max_ai_triage_findings <= 0:
+        raise ValueError("max_ai_triage_findings must be positive")
 
     root = Path(repo_path).expanduser().resolve()
     started = perf_counter()
@@ -145,8 +164,7 @@ def scan_repository(
         for name, runner in scanner_specs
     ]
 
-    # Preserve raw findings from all scanners. The scoring engine independently
-    # deduplicates matching fingerprints for its repository-level report.
+    # Preserve findings from every scanner. Scoring deduplicates independently.
     findings = [
         finding
         for result in results
@@ -162,6 +180,83 @@ def scan_repository(
     overall_status = _overall_status(results)
     debt_report = score_findings(findings)
 
+    triage_results: list[TriageResult] = []
+    triage_errors: list[str] = []
+    triage_attempted = enable_ai_triage
+    triage_complete = False
+
+    if enable_ai_triage:
+        try:
+            router = build_default_router()
+        except Exception as exc:  # noqa: BLE001
+            router = None
+            triage_errors.append(
+                f"Could not initialize AI triage ({type(exc).__name__})."
+            )
+
+        if router is None:
+            if not triage_errors:
+                triage_errors.append(
+                    "AI triage requested, but no provider API key is configured."
+                )
+
+        elif not findings:
+            # No findings means there was nothing to send to an AI provider.
+            triage_complete = True
+
+        else:
+            severity_order = {
+                "critical": 0,
+                "high": 1,
+                "medium": 2,
+                "low": 3,
+                "info": 4,
+            }
+
+            ordered_findings = sorted(
+                findings,
+                key=lambda finding: (
+                    severity_order.get(finding.severity.value, 5),
+                    finding.file_path,
+                    finding.start_line,
+                    finding.finding_id,
+                ),
+            )
+
+            selected_findings = ordered_findings[
+                :max_ai_triage_findings
+            ]
+
+            if len(ordered_findings) > len(selected_findings):
+                skipped = len(ordered_findings) - len(selected_findings)
+                triage_errors.append(
+                    f"AI triage limit reached: {skipped} findings were skipped."
+                )
+
+            triage_engine = TriageEngine(router)
+
+            for finding in selected_findings:
+                try:
+                    context = build_source_context(root, finding)
+
+                    result = triage_engine.triage_finding(
+                        finding,
+                        context=context,
+                    )
+                    triage_results.append(result)
+
+                except Exception as exc:  # noqa: BLE001
+                    # One failed finding must not stop the remaining triage work.
+                    triage_errors.append(
+                        "AI triage failed for finding "
+                        f"{finding.finding_id} ({type(exc).__name__})."
+                    )
+
+            triage_complete = (
+                len(triage_results) == len(findings)
+                and not triage_errors
+            )
+
     return RepositoryScanResult(
         repo_path=str(root),
         languages=language_report.languages,
@@ -172,7 +267,11 @@ def scan_repository(
         errors=errors,
         security_debt=debt_report,
         security_debt_complete=all(
-             result.status == ScannerStatus.SUCCESS
-             for result in results
-                      ),
+            result.status == ScannerStatus.SUCCESS
+            for result in results
+        ),
+        triage_results=triage_results,
+        triage_attempted=triage_attempted,
+        triage_complete=triage_complete,
+        triage_errors=triage_errors,
     )
