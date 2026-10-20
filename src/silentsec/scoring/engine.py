@@ -7,6 +7,7 @@ from enum import Enum
 from pydantic import BaseModel, Field
 
 from silentsec.schemas.finding import Finding, FindingStatus, Severity
+from silentsec.scoring.correlation import CorrelationGroup, correlate_findings
 
 # These are SilentSec v1 product heuristics, not an industry standard.
 BASE_POINTS: dict[Severity, int] = {
@@ -54,7 +55,7 @@ class SecurityDebtReport(BaseModel):
 
     highest_severity: Severity | None = None
     scored_findings: list[ScoredFinding] = Field(default_factory=list)
-
+    correlation_groups: list[CorrelationGroup] = Field(default_factory=list)
 
 def _effective_confidence(finding: Finding) -> float:
     """Use a documented default when a scanner provides no confidence."""
@@ -116,16 +117,9 @@ def _score_finding(finding: Finding) -> ScoredFinding:
     )
 
 
+
 def score_findings(findings: Iterable[Finding]) -> SecurityDebtReport:
-    """Score unique, open findings and return an explainable debt report.
-
-    Formula:
-        finding score = severity base points * (0.5 + 0.5 * confidence)
-
-    Exact fingerprints are deduplicated. When duplicates disagree, the
-    highest-severity finding is retained, with confidence used as a tie-breaker.
-    Fixed and suppressed findings are excluded from active security debt.
-    """
+    """Score logical open issues using exact and cross-tool correlation."""
     items = list(findings)
 
     fixed_count = sum(
@@ -138,18 +132,11 @@ def score_findings(findings: Iterable[Finding]) -> SecurityDebtReport:
         finding for finding in items if finding.status == FindingStatus.OPEN
     ]
 
-    grouped: dict[str, list[Finding]] = {}
-    for finding in open_findings:
-        grouped.setdefault(finding.fingerprint, []).append(finding)
-
-    # Select one Finding object per fingerprint, not a list of findings.
-    unique_findings = [
-        min(group, key=_representative_sort_key)
-        for group in grouped.values()
-    ]
+    correlation_groups = correlate_findings(open_findings)
 
     scored_findings = [
-        _score_finding(finding) for finding in unique_findings
+        _score_finding(group.representative)
+        for group in correlation_groups
     ]
     scored_findings.sort(
         key=lambda item: (
@@ -162,14 +149,8 @@ def score_findings(findings: Iterable[Finding]) -> SecurityDebtReport:
         )
     )
 
-    raw_score = round(
-        sum(item.score for item in scored_findings),
-        3,
-    )
-    repository_score = round(
-        min(raw_score, MAX_REPOSITORY_SCORE),
-        3,
-    )
+    raw_score = round(sum(item.score for item in scored_findings), 3)
+    repository_score = round(min(raw_score, MAX_REPOSITORY_SCORE), 3)
 
     highest_severity = max(
         (item.finding.severity for item in scored_findings),
@@ -177,15 +158,29 @@ def score_findings(findings: Iterable[Finding]) -> SecurityDebtReport:
         default=None,
     )
 
+    exact_duplicates_removed = sum(
+        len(group.findings) - 1
+        for group in correlation_groups
+        if group.correlation_type == "exact_fingerprint"
+    )
+    cross_tool_duplicates_removed = sum(
+        len(group.findings) - 1
+        for group in correlation_groups
+        if group.correlation_type == "cross_tool"
+    )
+
     return SecurityDebtReport(
         score=repository_score,
         raw_score=raw_score,
         risk_level=_risk_level_for_score(repository_score),
         input_findings_count=len(items),
-        unique_open_findings_count=len(unique_findings),
-        duplicate_findings_removed=len(open_findings) - len(unique_findings),
+        unique_open_findings_count=len(correlation_groups),
+        duplicate_findings_removed=(
+            exact_duplicates_removed + cross_tool_duplicates_removed
+        ),
         fixed_findings_excluded=fixed_count,
         suppressed_findings_excluded=suppressed_count,
         highest_severity=highest_severity,
         scored_findings=scored_findings,
+        correlation_groups=correlation_groups,
     )
