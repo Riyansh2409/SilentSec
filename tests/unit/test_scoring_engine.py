@@ -155,3 +155,85 @@ def test_findings_are_sorted_by_score_descending():
         Severity.LOW,
     ]
     assert report.highest_severity == Severity.CRITICAL
+
+
+def test_cross_tool_duplicates_are_scored_once():
+    bandit = make_finding(
+        fingerprint="bandit-shell",
+        severity=Severity.HIGH,
+        confidence=1.0,
+        rule_id="B602",
+    ).model_copy(
+        update={
+            "tool": "bandit",
+            "file_path": "src/app.py",
+            "start_line": 10,
+            "end_line": 10,
+            "cwe_id": "CWE-78",
+            "message": "subprocess call with shell=True",
+        }
+    )
+    semgrep = make_finding(
+        fingerprint="semgrep-shell",
+        severity=Severity.HIGH,
+        confidence=1.0,
+        rule_id="subprocess-shell-true",
+    ).model_copy(
+        update={
+            "tool": "semgrep",
+            "file_path": "src/app.py",
+            "start_line": 10,
+            "end_line": 10,
+            "cwe_id": "CWE-78",
+            "message": "subprocess call with shell=True",
+        }
+    )
+
+    report = score_findings([bandit, semgrep])
+
+    assert report.input_findings_count == 2
+    assert report.unique_open_findings_count == 1
+    assert report.duplicate_findings_removed == 1
+    assert len(report.scored_findings) == 1
+    assert report.scored_findings[0].score == 15
+    assert len(report.correlation_groups[0].findings) == 2
+
+
+def test_same_cwe_at_different_lines_is_scored_separately():
+    first = make_finding(
+        fingerprint="first-shell",
+        severity=Severity.HIGH,
+        confidence=1.0,
+        rule_id="B602",
+    ).model_copy(
+        update={
+            "tool": "bandit",
+            "file_path": "src/app.py",
+            "start_line": 10,
+            "end_line": 10,
+            "cwe_id": "CWE-78",
+            "message": "subprocess call with shell=True",
+        }
+    )
+    second = make_finding(
+        fingerprint="second-shell",
+        severity=Severity.HIGH,
+        confidence=1.0,
+        rule_id="subprocess-shell-true",
+    ).model_copy(
+        update={
+            "tool": "semgrep",
+            "file_path": "src/app.py",
+            "start_line": 20,
+            "end_line": 20,
+            "cwe_id": "CWE-78",
+            "message": "subprocess call with shell=True",
+        }
+    )
+
+    report = score_findings([first, second])
+
+    assert report.unique_open_findings_count == 2
+    assert report.duplicate_findings_removed == 0
+    assert len(report.scored_findings) == 2
+    assert report.score == 30
