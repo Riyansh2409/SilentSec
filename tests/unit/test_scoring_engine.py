@@ -237,3 +237,39 @@ def test_same_cwe_at_different_lines_is_scored_separately():
     assert report.duplicate_findings_removed == 0
     assert len(report.scored_findings) == 2
     assert report.score == 30
+
+
+
+
+
+
+def test_report_exposes_separate_duplicate_counts():
+    bandit = make_finding(
+        fingerprint="bandit-metrics",
+        rule_id="B602",
+    )
+
+    bandit = bandit.model_copy(update={"cwe_id": "CWE-78"})
+    semgrep = bandit.model_copy(
+        update={
+            "fingerprint": "semgrep-metrics",
+            "tool": "semgrep",
+            "rule_id": "subprocess-shell-true",
+        }
+    )
+
+    report = score_findings([bandit, semgrep])
+
+    assert report.exact_duplicates_removed == 0
+    assert report.cross_tool_duplicates_removed == 1
+    assert report.duplicate_findings_removed == 1
+
+
+def test_report_duplicate_counts_are_zero_without_duplicates():
+    finding = make_finding(fingerprint="unique-metrics")
+
+    report = score_findings([finding])
+
+    assert report.exact_duplicates_removed == 0
+    assert report.cross_tool_duplicates_removed == 0
+    assert report.duplicate_findings_removed == 0

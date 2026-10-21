@@ -52,10 +52,14 @@ class SecurityDebtReport(BaseModel):
     duplicate_findings_removed: int = Field(ge=0)
     fixed_findings_excluded: int = Field(ge=0)
     suppressed_findings_excluded: int = Field(ge=0)
+    exact_duplicates_removed: int = Field(ge=0, default=0)
+    cross_tool_duplicates_removed: int = Field(ge=0, default=0)
 
     highest_severity: Severity | None = None
     scored_findings: list[ScoredFinding] = Field(default_factory=list)
     correlation_groups: list[CorrelationGroup] = Field(default_factory=list)
+
+
 
 def _effective_confidence(finding: Finding) -> float:
     """Use a documented default when a scanner provides no confidence."""
@@ -183,4 +187,6 @@ def score_findings(findings: Iterable[Finding]) -> SecurityDebtReport:
         highest_severity=highest_severity,
         scored_findings=scored_findings,
         correlation_groups=correlation_groups,
+        exact_duplicates_removed=exact_duplicates_removed,
+        cross_tool_duplicates_removed=cross_tool_duplicates_removed,
     )
