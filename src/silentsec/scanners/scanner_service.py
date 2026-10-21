@@ -1,7 +1,6 @@
-
 """Orchestrate repository scanners, security-debt scoring, and AI triage."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from time import perf_counter
 
@@ -15,6 +14,11 @@ from silentsec.triage import (
     TriageEngine,
     TriageResult,
     build_default_router,
+)
+from silentsec.verification import (
+    VerificationHistory,
+    VerificationReport,
+    compare_findings,
 )
 
 from .bandit_runner import run_bandit
@@ -39,6 +43,8 @@ class RepositoryScanResult(BaseModel):
     triage_attempted: bool = False
     triage_complete: bool = False
     triage_errors: list[str] = Field(default_factory=list)
+    verification_report: VerificationReport | None = None
+    verification_attempted: bool = False
 
 
 ScannerRunner = Callable[..., ScannerRunResult]
@@ -65,9 +71,7 @@ def _run_safely(
             scanner=scanner_name,
             status=ScannerStatus.FAILED,
             duration_seconds=round(perf_counter() - started, 3),
-            errors=[
-                f"{scanner_name} runner raised {type(exc).__name__}."
-            ],
+            errors=[f"{scanner_name} runner raised {type(exc).__name__}."],
         )
 
 
@@ -89,17 +93,9 @@ def _overall_status(
         }
     ]
 
-    failed = [
-        result
-        for result in results
-        if result.status == ScannerStatus.FAILED
-    ]
+    failed = [result for result in results if result.status == ScannerStatus.FAILED]
 
-    partial = [
-        result
-        for result in results
-        if result.status == ScannerStatus.PARTIAL
-    ]
+    partial = [result for result in results if result.status == ScannerStatus.PARTIAL]
 
     if not successful:
         if failed:
@@ -118,6 +114,8 @@ def scan_repository(
     *,
     enable_ai_triage: bool = False,
     max_ai_triage_findings: int = 20,
+    verification_baseline: Iterable[Finding] | None = None,
+    verification_history: VerificationHistory | None = None,
 ) -> RepositoryScanResult:
     """Scan a repository, score security debt, and optionally triage findings."""
 
@@ -165,20 +163,31 @@ def scan_repository(
     ]
 
     # Preserve findings from every scanner. Scoring deduplicates independently.
-    findings = [
-        finding
-        for result in results
-        for finding in result.findings
-    ]
+    findings = [finding for result in results for finding in result.findings]
 
-    errors = [
-        f"{result.scanner}: {error}"
-        for result in results
-        for error in result.errors
-    ]
+    errors = [f"{result.scanner}: {error}" for result in results for error in result.errors]
 
     overall_status = _overall_status(results)
     debt_report = score_findings(findings)
+
+    security_debt_complete = all(result.status == ScannerStatus.SUCCESS for result in results)
+
+    verification_report = None
+    verification_attempted = verification_baseline is not None
+
+    if verification_baseline is not None:
+        if verification_history is not None:
+            verification_report = verification_history.compare(
+                verification_baseline,
+                findings,
+                scan_complete=security_debt_complete,
+            )
+        else:
+            verification_report = compare_findings(
+                verification_baseline,
+                findings,
+                scan_complete=security_debt_complete,
+            )
 
     triage_results: list[TriageResult] = []
     triage_errors: list[str] = []
@@ -190,15 +199,11 @@ def scan_repository(
             router = build_default_router()
         except Exception as exc:  # noqa: BLE001
             router = None
-            triage_errors.append(
-                f"Could not initialize AI triage ({type(exc).__name__})."
-            )
+            triage_errors.append(f"Could not initialize AI triage ({type(exc).__name__}).")
 
         if router is None:
             if not triage_errors:
-                triage_errors.append(
-                    "AI triage requested, but no provider API key is configured."
-                )
+                triage_errors.append("AI triage requested, but no provider API key is configured.")
 
         elif not findings:
             # No findings means there was nothing to send to an AI provider.
@@ -223,15 +228,11 @@ def scan_repository(
                 ),
             )
 
-            selected_findings = ordered_findings[
-                :max_ai_triage_findings
-            ]
+            selected_findings = ordered_findings[:max_ai_triage_findings]
 
             if len(ordered_findings) > len(selected_findings):
                 skipped = len(ordered_findings) - len(selected_findings)
-                triage_errors.append(
-                    f"AI triage limit reached: {skipped} findings were skipped."
-                )
+                triage_errors.append(f"AI triage limit reached: {skipped} findings were skipped.")
 
             triage_engine = TriageEngine(router)
 
@@ -248,14 +249,10 @@ def scan_repository(
                 except Exception as exc:  # noqa: BLE001
                     # One failed finding must not stop the remaining triage work.
                     triage_errors.append(
-                        "AI triage failed for finding "
-                        f"{finding.finding_id} ({type(exc).__name__})."
+                        f"AI triage failed for finding {finding.finding_id} ({type(exc).__name__})."
                     )
 
-            triage_complete = (
-                len(triage_results) == len(findings)
-                and not triage_errors
-            )
+            triage_complete = len(triage_results) == len(findings) and not triage_errors
 
     return RepositoryScanResult(
         repo_path=str(root),
@@ -266,12 +263,11 @@ def scan_repository(
         duration_seconds=round(perf_counter() - started, 3),
         errors=errors,
         security_debt=debt_report,
-        security_debt_complete=all(
-            result.status == ScannerStatus.SUCCESS
-            for result in results
-        ),
+        security_debt_complete=security_debt_complete,
         triage_results=triage_results,
         triage_attempted=triage_attempted,
         triage_complete=triage_complete,
         triage_errors=triage_errors,
+        verification_report=verification_report,
+        verification_attempted=verification_attempted,
     )
