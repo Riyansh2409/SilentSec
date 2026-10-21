@@ -471,3 +471,94 @@ def test_ai_provider_failure_preserves_security_debt_score(
     assert report.triage_attempted is True
     assert report.triage_complete is False
     assert report.triage_errors
+
+
+
+def test_verification_integrates_with_complete_repository_scan(
+    tmp_path: Path,
+):
+    baseline = make_finding(fingerprint="baseline")
+    current = make_finding(fingerprint="current")
+
+    with (
+        patch(
+            "silentsec.scanners.scanner_service.run_semgrep",
+            return_value=make_result("semgrep", findings=[current]),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.run_bandit",
+            return_value=make_result("bandit"),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.run_gitleaks",
+            return_value=make_result("gitleaks"),
+        ),
+    ):
+        report = scan_repository(
+            tmp_path,
+            verification_baseline=[baseline],
+        )
+
+    assert report.verification_attempted is True
+    assert report.verification_report is not None
+    assert report.verification_report.scan_complete is True
+    assert report.verification_report.still_open_count == 1
+    assert report.verification_report.results[0].current_finding == current
+
+
+def test_incomplete_repository_scan_cannot_confirm_resolution(
+    tmp_path: Path,
+):
+    baseline = make_finding(fingerprint="baseline")
+
+    with (
+        patch(
+            "silentsec.scanners.scanner_service.run_semgrep",
+            return_value=make_result("semgrep"),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.run_bandit",
+            return_value=make_result(
+                "bandit",
+                ScannerStatus.FAILED,
+                ["simulated failure"],
+            ),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.run_gitleaks",
+            return_value=make_result("gitleaks"),
+        ),
+    ):
+        report = scan_repository(
+            tmp_path,
+            verification_baseline=[baseline],
+        )
+
+    assert report.security_debt_complete is False
+    assert report.verification_report is not None
+    assert report.verification_report.scan_complete is False
+    assert report.verification_report.incomplete_count == 1
+    assert report.verification_report.resolved_count == 0
+
+
+def test_verification_is_not_attempted_without_baseline(
+    tmp_path: Path,
+):
+    with (
+        patch(
+            "silentsec.scanners.scanner_service.run_semgrep",
+            return_value=make_result("semgrep"),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.run_bandit",
+            return_value=make_result("bandit"),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.run_gitleaks",
+            return_value=make_result("gitleaks"),
+        ),
+    ):
+        report = scan_repository(tmp_path)
+
+    assert report.verification_attempted is False
+    assert report.verification_report is None
