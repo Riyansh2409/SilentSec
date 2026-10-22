@@ -130,6 +130,8 @@ class VerificationHistory(BaseModel):
                 )
             )
 
+            self.resolved_identities.discard(identity)
+            self.resolved_findings.pop(identity, None)
         return report.model_copy(update={"results": results})
 
 

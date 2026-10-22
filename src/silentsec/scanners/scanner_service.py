@@ -27,6 +27,29 @@ from .results import ScannerRunResult, ScannerStatus
 from .semgrep_runner import run_semgrep
 
 
+def _build_verification_report(
+    baseline: list[Finding] | None,
+    current: Iterable[Finding],
+    history: VerificationHistory | None,
+) -> VerificationReport | None:
+    """Compare findings without claiming resolution from an incomplete scan."""
+    if baseline is None:
+        return None
+
+    if history is not None:
+        return history.compare(
+            baseline,
+            current,
+            scan_complete=False,
+        )
+
+    return compare_findings(
+        baseline,
+        current,
+        scan_complete=False,
+    )
+
+
 class RepositoryScanResult(BaseModel):
     """Combined result of scanner runs for one repository."""
 
@@ -127,23 +150,36 @@ def scan_repository(
 
     root = Path(repo_path).expanduser().resolve()
     started = perf_counter()
-
+    baseline_findings = list(verification_baseline) if verification_baseline is not None else None
     if not root.is_dir():
+        verification_report = _build_verification_report(
+            baseline_findings,
+            [],
+            verification_history,
+        )
         return RepositoryScanResult(
             repo_path=str(root),
             status=ScannerStatus.FAILED,
             duration_seconds=0,
             errors=["Repository directory does not exist."],
+            verification_report=verification_report,
+            verification_attempted=baseline_findings is not None,
         )
-
     try:
         language_report = detect_languages(root)
     except (OSError, ValueError):
+        verification_report = _build_verification_report(
+            baseline_findings,
+            [],
+            verification_history,
+        )
         return RepositoryScanResult(
             repo_path=str(root),
             status=ScannerStatus.FAILED,
             duration_seconds=round(perf_counter() - started, 3),
             errors=["Could not inspect repository languages."],
+            verification_report=verification_report,
+            verification_attempted=baseline_findings is not None,
         )
 
     scanner_specs: list[tuple[str, ScannerRunner]] = [
@@ -175,16 +211,18 @@ def scan_repository(
     verification_report = None
     verification_attempted = verification_baseline is not None
 
-    if verification_baseline is not None:
+    verification_attempted = baseline_findings is not None
+
+    if baseline_findings is not None:
         if verification_history is not None:
             verification_report = verification_history.compare(
-                verification_baseline,
+                baseline_findings,
                 findings,
                 scan_complete=security_debt_complete,
             )
         else:
             verification_report = compare_findings(
-                verification_baseline,
+                baseline_findings,
                 findings,
                 scan_complete=security_debt_complete,
             )

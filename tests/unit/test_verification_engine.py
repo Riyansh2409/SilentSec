@@ -200,3 +200,51 @@ def test_ambiguous_comparison_does_not_change_resolution_history():
 
     assert report.incomplete_count == 2
     assert history.resolved_identities == before
+
+
+def test_reintroduced_finding_is_removed_from_resolved_history():
+    history = VerificationHistory()
+    original = make_finding(fingerprint="original")
+
+    # First complete scan confirms resolution.
+    first = history.compare([original], [], scan_complete=True)
+    assert first.resolved_count == 1
+
+    # The finding returns while the baseline is empty.
+    returned = make_finding(fingerprint="returned")
+    second = history.compare([], [returned], scan_complete=True)
+
+    assert second.reintroduced_count == 1
+
+    # Once reintroduced, it should no longer be stored as resolved.
+    identity = ("bandit", "b602", "src/app.py")
+    assert identity not in history.resolved_identities
+    assert identity not in history.resolved_findings
+
+
+def test_reintroduced_finding_stays_open_on_subsequent_scan():
+    history = VerificationHistory()
+    original = make_finding(fingerprint="original")
+
+    # First scan confirms the finding is resolved.
+    history.compare([original], [], scan_complete=True)
+
+    # Second scan detects that the finding has returned.
+    returned = make_finding(fingerprint="returned")
+    second = history.compare([], [returned], scan_complete=True)
+    assert second.reintroduced_count == 1
+
+    # Third scan still reports the finding.
+    current = make_finding(
+        start_line=15,
+        fingerprint="still-present",
+    )
+    third = history.compare([returned], [current], scan_complete=True)
+
+    assert third.still_open_count == 1
+    assert third.reintroduced_count == 0
+    assert third.results[0].status == VerificationStatus.STILL_OPEN
+
+    identity = ("bandit", "b602", "src/app.py")
+    assert identity not in history.resolved_identities
+    assert identity not in history.resolved_findings
