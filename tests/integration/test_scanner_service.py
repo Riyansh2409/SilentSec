@@ -11,6 +11,7 @@ from silentsec.schemas.finding import (
 )
 from silentsec.scoring import RiskLevel
 from silentsec.triage import TriagePriority, TriageResult
+from silentsec.verification import VerificationHistory, VerificationStatus
 
 
 def make_finding(
@@ -272,7 +273,6 @@ def test_partial_scan_still_returns_available_debt_report(
     assert any("simulated failure" in error for error in report.errors)
 
 
-
 def make_triage_result(finding: Finding) -> TriageResult:
     return TriageResult(
         finding_id=finding.finding_id,
@@ -346,6 +346,7 @@ def test_ai_triage_receives_source_context(tmp_path: Path):
     assert len(received_contexts) == 1
     assert "line 10" in received_contexts[0]
 
+
 def test_ai_triage_failure_does_not_stop_remaining_findings(
     tmp_path: Path,
 ):
@@ -354,9 +355,7 @@ def test_ai_triage_failure_does_not_stop_remaining_findings(
     calls: list[str] = []
 
     class FlakyRouter:
-        def triage(
-            self, *, finding: Finding, context: str = ""
-        ) -> TriageResult:
+        def triage(self, *, finding: Finding, context: str = "") -> TriageResult:
             calls.append(finding.fingerprint)
             if finding.fingerprint == "first-finding":
                 raise RuntimeError("simulated provider failure")
@@ -365,9 +364,7 @@ def test_ai_triage_failure_does_not_stop_remaining_findings(
     with (
         patch(
             "silentsec.scanners.scanner_service.run_semgrep",
-            return_value=make_result(
-                "semgrep", findings=[first, second]
-            ),
+            return_value=make_result("semgrep", findings=[first, second]),
         ),
         patch(
             "silentsec.scanners.scanner_service.run_bandit",
@@ -398,9 +395,7 @@ def test_ai_triage_limit_is_reported(tmp_path: Path):
     ]
 
     class FakeRouter:
-        def triage(
-            self, *, finding: Finding, context: str = ""
-        ) -> TriageResult:
+        def triage(self, *, finding: Finding, context: str = "") -> TriageResult:
             return make_triage_result(finding)
 
     with (
@@ -430,10 +425,7 @@ def test_ai_triage_limit_is_reported(tmp_path: Path):
     assert len(report.triage_results) == 1
     assert report.triage_results[0].fingerprint == "high-finding"
     assert report.triage_complete is False
-    assert any(
-        "1 findings were skipped" in error
-        for error in report.triage_errors
-    )
+    assert any("1 findings were skipped" in error for error in report.triage_errors)
 
 
 def test_ai_provider_failure_preserves_security_debt_score(
@@ -471,7 +463,6 @@ def test_ai_provider_failure_preserves_security_debt_score(
     assert report.triage_attempted is True
     assert report.triage_complete is False
     assert report.triage_errors
-
 
 
 def test_verification_integrates_with_complete_repository_scan(
@@ -562,3 +553,50 @@ def test_verification_is_not_attempted_without_baseline(
 
     assert report.verification_attempted is False
     assert report.verification_report is None
+
+
+def test_missing_repository_marks_verification_incomplete(tmp_path: Path):
+    baseline = make_finding(fingerprint="baseline")
+    missing_repo = tmp_path / "missing-repository"
+    history = VerificationHistory()
+
+    report = scan_repository(
+        missing_repo,
+        verification_baseline=[baseline],
+        verification_history=history,
+    )
+
+    assert report.status == ScannerStatus.FAILED
+    assert report.verification_attempted is True
+    assert report.verification_report is not None
+    assert report.verification_report.scan_complete is False
+    assert report.verification_report.incomplete_count == 1
+    assert report.verification_report.resolved_count == 0
+    assert report.verification_report.results[0].status == (VerificationStatus.INCOMPLETE)
+    assert not history.resolved_identities
+
+
+def test_language_detection_failure_marks_verification_incomplete(
+    tmp_path: Path,
+):
+    baseline = make_finding(fingerprint="baseline")
+    history = VerificationHistory()
+
+    with patch(
+        "silentsec.scanners.scanner_service.detect_languages",
+        side_effect=OSError("simulated filesystem failure"),
+    ):
+        report = scan_repository(
+            tmp_path,
+            verification_baseline=[baseline],
+            verification_history=history,
+        )
+
+    assert report.status == ScannerStatus.FAILED
+    assert report.verification_attempted is True
+    assert report.verification_report is not None
+    assert report.verification_report.scan_complete is False
+    assert report.verification_report.incomplete_count == 1
+    assert report.verification_report.resolved_count == 0
+    assert report.verification_report.results[0].status == (VerificationStatus.INCOMPLETE)
+    assert not history.resolved_identities
