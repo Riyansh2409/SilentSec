@@ -204,7 +204,7 @@ def scan_repository(
     errors = [f"{result.scanner}: {error}" for result in results for error in result.errors]
 
     overall_status = _overall_status(results)
-    debt_report = score_findings(findings)
+    debt_report = score_findings(findings, repo_root=str(root))
 
     security_debt_complete = all(result.status == ScannerStatus.SUCCESS for result in results)
 

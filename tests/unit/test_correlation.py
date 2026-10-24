@@ -1,3 +1,4 @@
+from silentsec.architecture.import_analyzer import ImportDependency
 from silentsec.schemas.finding import Finding, Severity
 from silentsec.scoring.correlation import correlate_findings
 
@@ -241,3 +242,109 @@ def test_exact_fingerprint_evidence_reports_location_mismatch():
     assert evidence.exact_fingerprint_match is True
     assert evidence.same_file is False
     assert evidence.overlapping_lines is False
+
+def test_correlates_cross_file_findings_with_direct_architecture_dependency(
+    tmp_path,
+):
+    first_file = "src/package/handler.py"
+    second_file = "src/package/runner.py"
+
+    first = make_finding(
+        fingerprint="bandit-cross-file",
+        tool="bandit",
+        rule_id="B602",
+        message="subprocess command injection shell execution",
+        file_path=first_file,
+    )
+    second = make_finding(
+        fingerprint="semgrep-cross-file",
+        tool="semgrep",
+        rule_id="subprocess-shell-true",
+        message="subprocess command injection shell execution",
+        file_path=second_file,
+    )
+
+    dependencies = [
+        ImportDependency(
+            source_file="package/handler.py",
+            source_module="package.handler",
+            imported_module="package.runner",
+        )
+    ]
+
+    (tmp_path / "src" / "package").mkdir(parents=True)
+
+    groups = correlate_findings(
+        [first, second],
+        dependencies=dependencies,
+        repo_root=str(tmp_path),
+    )
+
+    assert len(groups) == 1
+    assert groups[0].correlation_type == "cross_tool"
+    assert groups[0].evidence.architecture_dependency is True
+
+
+def test_does_not_correlate_cross_file_findings_without_dependency(tmp_path):
+    first = make_finding(
+        fingerprint="bandit-no-edge",
+        tool="bandit",
+        rule_id="B602",
+        message="subprocess command injection shell execution",
+        file_path="src/package/handler.py",
+    )
+    second = make_finding(
+        fingerprint="semgrep-no-edge",
+        tool="semgrep",
+        rule_id="subprocess-shell-true",
+        message="subprocess command injection shell execution",
+        file_path="src/package/runner.py",
+    )
+
+    (tmp_path / "src" / "package").mkdir(parents=True)
+
+    groups = correlate_findings(
+        [first, second],
+        repo_root=str(tmp_path),
+    )
+
+    assert len(groups) == 2
+
+
+def test_does_not_correlate_cross_file_findings_with_different_cwes(
+    tmp_path,
+):
+    first = make_finding(
+        fingerprint="bandit-different-cwe",
+        tool="bandit",
+        rule_id="B602",
+        message="subprocess command injection shell execution",
+        file_path="src/package/handler.py",
+        cwe_id="CWE-78",
+    )
+    second = make_finding(
+        fingerprint="semgrep-different-cwe",
+        tool="semgrep",
+        rule_id="subprocess-shell-true",
+        message="subprocess command injection shell execution",
+        file_path="src/package/runner.py",
+        cwe_id="CWE-89",
+    )
+
+    dependencies = [
+        ImportDependency(
+            source_file="package/handler.py",
+            source_module="package.handler",
+            imported_module="package.runner",
+        )
+    ]
+
+    (tmp_path / "src" / "package").mkdir(parents=True)
+
+    groups = correlate_findings(
+        [first, second],
+        dependencies=dependencies,
+        repo_root=str(tmp_path),
+    )
+
+    assert len(groups) == 2
