@@ -1,4 +1,3 @@
-
 """Evidence-based correlation of findings reported by security tools."""
 
 import re
@@ -9,6 +8,16 @@ from pydantic import BaseModel, Field
 from silentsec.schemas.finding import Finding, Severity
 
 
+class CorrelationEvidence(BaseModel):
+    """Structured evidence supporting a finding correlation."""
+
+    exact_fingerprint_match: bool = False
+    shared_cwe: bool = False
+    same_file: bool = False
+    overlapping_lines: bool = False
+    shared_tokens: list[str] = Field(default_factory=list)
+
+
 class CorrelationGroup(BaseModel):
     """Original findings linked to one logical security issue."""
 
@@ -16,6 +25,7 @@ class CorrelationGroup(BaseModel):
     findings: list[Finding] = Field(min_length=1)
     correlation_type: str
     reason: str
+    evidence: CorrelationEvidence = Field(default_factory=CorrelationEvidence)
 
 
 def _normalized_path(path: str) -> str:
@@ -28,10 +38,7 @@ def _line_ranges_overlap(first: Finding, second: Finding) -> bool:
     first_end = first.end_line or first.start_line
     second_end = second.end_line or second.start_line
 
-    return (
-        first.start_line <= second_end
-        and second.start_line <= first_end
-    )
+    return first.start_line <= second_end and second.start_line <= first_end
 
 
 def _evidence_tokens(finding: Finding) -> set[str]:
@@ -40,9 +47,22 @@ def _evidence_tokens(finding: Finding) -> set[str]:
     tokens = set(re.findall(r"[a-z][a-z0-9_+#.-]{2,}", text))
 
     generic_tokens = {
-        "the", "and", "for", "with", "from", "this", "that",
-        "issue", "security", "detected", "found", "potential",
-        "rule", "line", "use", "unsafe",
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "this",
+        "that",
+        "issue",
+        "security",
+        "detected",
+        "found",
+        "potential",
+        "rule",
+        "line",
+        "use",
+        "unsafe",
     }
     return tokens - generic_tokens
 
@@ -55,9 +75,7 @@ def _has_cross_tool_evidence(
     if first.tool.casefold() == second.tool.casefold():
         return False
 
-    if _normalized_path(first.file_path) != _normalized_path(
-        second.file_path
-    ):
+    if _normalized_path(first.file_path) != _normalized_path(second.file_path):
         return False
 
     if not _line_ranges_overlap(first, second):
@@ -73,6 +91,45 @@ def _has_cross_tool_evidence(
     return bool(shared_tokens)
 
 
+def _build_evidence(
+    findings: list[Finding],
+    *,
+    exact_fingerprint_match: bool = False,
+) -> CorrelationEvidence:
+    """Build auditable evidence from the findings in a group."""
+    shared_cwe = (
+        len(findings) > 1
+        and all(finding.cwe_id for finding in findings)
+        and len({finding.cwe_id.casefold() for finding in findings}) == 1
+    )
+
+    same_file = len({_normalized_path(finding.file_path) for finding in findings}) == 1
+
+    overlapping_lines = (
+        len(findings) > 1
+        and all(_line_ranges_overlap(findings[0], finding) for finding in findings[1:])
+        and all(
+            _line_ranges_overlap(first, second)
+            for index, first in enumerate(findings)
+            for second in findings[index + 1 :]
+        )
+    )
+
+    shared_tokens = (
+        sorted(set.intersection(*(_evidence_tokens(finding) for finding in findings)))
+        if len(findings) > 1
+        else []
+    )
+
+    return CorrelationEvidence(
+        exact_fingerprint_match=exact_fingerprint_match,
+        shared_cwe=bool(shared_cwe),
+        same_file=same_file,
+        overlapping_lines=overlapping_lines,
+        shared_tokens=shared_tokens,
+    )
+
+
 def _representative_key(finding: Finding) -> tuple:
     """Prefer higher severity, then confidence, deterministically."""
     severity_order = {
@@ -82,11 +139,7 @@ def _representative_key(finding: Finding) -> tuple:
         Severity.LOW: 2,
         Severity.INFO: 1,
     }
-    confidence = (
-        finding.confidence
-        if finding.confidence is not None
-        else 0.75
-    )
+    confidence = finding.confidence if finding.confidence is not None else 0.75
 
     return (
         -severity_order[finding.severity],
@@ -137,6 +190,10 @@ def correlate_findings(
                     findings=sorted(members, key=_stable_key),
                     correlation_type="exact_fingerprint",
                     reason="Findings share the same fingerprint.",
+                    evidence=_build_evidence(
+                        members,
+                        exact_fingerprint_match=True,
+                    ),
                 )
             )
 
@@ -162,10 +219,7 @@ def correlate_findings(
             if candidate_tool in tools_in_group:
                 continue
 
-            if all(
-                _has_cross_tool_evidence(member, candidate)
-                for member in matches
-            ):
+            if all(_has_cross_tool_evidence(member, candidate) for member in matches):
                 matches.append(candidate)
                 tools_in_group.add(candidate_tool)
 
@@ -191,12 +245,11 @@ def correlate_findings(
                     "Different tools reported matching CWE and "
                     "overlapping locations with shared issue evidence."
                 ),
+                evidence=_build_evidence(matches),
             )
         )
 
-        consumed_fingerprints.update(
-            member.fingerprint for member in matches
-        )
+        consumed_fingerprints.update(member.fingerprint for member in matches)
 
     return sorted(
         groups,
