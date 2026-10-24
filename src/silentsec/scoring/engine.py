@@ -6,6 +6,7 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
+from silentsec.architecture.import_analyzer import analyze_python_imports
 from silentsec.schemas.finding import Finding, FindingStatus, Severity
 from silentsec.scoring.correlation import CorrelationGroup, correlate_findings
 
@@ -122,7 +123,11 @@ def _score_finding(finding: Finding) -> ScoredFinding:
 
 
 
-def score_findings(findings: Iterable[Finding]) -> SecurityDebtReport:
+def score_findings(
+    findings: Iterable[Finding],
+    *,
+    repo_root: str | None = None,
+) -> SecurityDebtReport:
     """Score logical open issues using exact and cross-tool correlation."""
     items = list(findings)
 
@@ -136,7 +141,15 @@ def score_findings(findings: Iterable[Finding]) -> SecurityDebtReport:
         finding for finding in items if finding.status == FindingStatus.OPEN
     ]
 
-    correlation_groups = correlate_findings(open_findings)
+    if repo_root is not None:
+        import_analysis = analyze_python_imports(repo_root)
+        correlation_groups = correlate_findings(
+            open_findings,
+            dependencies=import_analysis.dependencies,
+            repo_root=repo_root,
+        )
+    else:
+        correlation_groups = correlate_findings(open_findings)
 
     scored_findings = [
         _score_finding(group.representative)
