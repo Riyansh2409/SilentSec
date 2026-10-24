@@ -185,11 +185,11 @@ def test_ambiguous_comparison_does_not_change_resolution_history():
 
     duplicate_baseline = [
         make_finding(start_line=10, fingerprint="old-1"),
-        make_finding(start_line=11, fingerprint="old-2"),
+        make_finding(start_line=10, fingerprint="old-2"),
     ]
     duplicate_current = [
         make_finding(start_line=10, fingerprint="new-1"),
-        make_finding(start_line=11, fingerprint="new-2"),
+        make_finding(start_line=10, fingerprint="new-2"),
     ]
 
     report = history.compare(
@@ -264,11 +264,11 @@ def test_history_preserves_resolution_after_ambiguous_comparison():
     # An ambiguous comparison must not erase the prior resolution.
     duplicate_baseline = [
         make_finding(start_line=10, fingerprint="old-1"),
-        make_finding(start_line=11, fingerprint="old-2"),
+        make_finding(start_line=10, fingerprint="old-2"),
     ]
     duplicate_current = [
         make_finding(start_line=10, fingerprint="new-1"),
-        make_finding(start_line=11, fingerprint="new-2"),
+        make_finding(start_line=10, fingerprint="new-2"),
     ]
 
     ambiguous = history.compare(
@@ -290,3 +290,36 @@ def test_history_preserves_resolution_after_ambiguous_comparison():
 
     assert next_report.reintroduced_count == 0
     assert identity in history.resolved_identities
+
+def test_duplicate_identity_is_matched_when_line_ranges_are_unique():
+    baseline = [
+        make_finding(start_line=10, fingerprint="old-1"),
+        make_finding(start_line=20, fingerprint="old-2"),
+    ]
+    current = [
+        make_finding(start_line=10, fingerprint="new-1"),
+        make_finding(start_line=20, fingerprint="new-2"),
+    ]
+
+    report = compare_findings(baseline, current, scan_complete=True)
+
+    assert report.still_open_count == 2
+    assert report.incomplete_count == 0
+    assert report.resolved_count == 0
+
+def test_duplicate_identity_with_extra_current_finding_is_incomplete():
+    baseline = [
+        make_finding(start_line=10, fingerprint="old-1"),
+        make_finding(start_line=20, fingerprint="old-2"),
+    ]
+    current = [
+        make_finding(start_line=10, fingerprint="new-1"),
+        make_finding(start_line=20, fingerprint="new-2"),
+        make_finding(start_line=30, fingerprint="new-3"),
+    ]
+
+    report = compare_findings(baseline, current, scan_complete=True)
+
+    assert report.incomplete_count == 2
+    assert report.still_open_count == 0
+    assert report.resolved_count == 0

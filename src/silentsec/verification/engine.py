@@ -209,7 +209,55 @@ def compare_findings(
                 )
             )
             continue
+        if baseline_counts[identity] > 1 and current_counts[identity] > 1:
+            baseline_lines = [
+                finding
+                for finding in baseline
+                if _identity(finding) == identity
+            ]
+            current_lines = [
+                finding
+                for finding in current
+                if _identity(finding) == identity
+            ]
 
+            baseline_ranges = [
+                (finding.start_line, finding.end_line)
+                for finding in baseline_lines
+            ]
+            current_ranges = [
+                (finding.start_line, finding.end_line)
+                for finding in current_lines
+            ]
+
+            if (
+                len(baseline_lines) == len(current_lines)
+                and len(set(baseline_ranges)) == len(baseline_ranges)
+                and len(set(current_ranges)) == len(current_ranges)
+                and set(baseline_ranges) == set(current_ranges)
+            ):
+                matched_finding = next(
+                    finding
+                    for finding in current_lines
+                    if (
+                        finding.start_line,
+                        finding.end_line,
+                    )
+                    == (old_finding.start_line, old_finding.end_line)
+                )
+
+                results.append(
+                    FindingVerification(
+                        baseline_finding=old_finding,
+                        current_finding=matched_finding,
+                        status=VerificationStatus.STILL_OPEN,
+                        reason=(
+                            "Duplicate rule identities were matched by "
+                            "their unique, unchanged line ranges."
+                        ),
+                    )
+                )
+                continue
         results.append(
             FindingVerification(
                 baseline_finding=old_finding,
