@@ -273,3 +273,52 @@ def test_report_duplicate_counts_are_zero_without_duplicates():
     assert report.exact_duplicates_removed == 0
     assert report.cross_tool_duplicates_removed == 0
     assert report.duplicate_findings_removed == 0
+
+def test_report_serializes_correlation_evidence():
+    bandit = make_finding(
+        fingerprint="bandit-evidence",
+        severity=Severity.HIGH,
+        confidence=1.0,
+        rule_id="B602",
+    ).model_copy(
+        update={
+            "tool": "bandit",
+            "file_path": "src/app.py",
+            "start_line": 10,
+            "end_line": 10,
+            "cwe_id": "CWE-78",
+            "message": "subprocess call with shell=True",
+        }
+    )
+    semgrep = make_finding(
+        fingerprint="semgrep-evidence",
+        severity=Severity.HIGH,
+        confidence=1.0,
+        rule_id="subprocess-shell-true",
+    ).model_copy(
+        update={
+            "tool": "semgrep",
+            "file_path": "src/app.py",
+            "start_line": 10,
+            "end_line": 10,
+            "cwe_id": "CWE-78",
+            "message": "subprocess call with shell=True",
+        }
+    )
+
+    report = score_findings([bandit, semgrep])
+    payload = report.model_dump(mode="json")
+
+    assert len(payload["correlation_groups"]) == 1
+
+    group = payload["correlation_groups"][0]
+    evidence = group["evidence"]
+
+    assert group["correlation_type"] == "cross_tool"
+    assert evidence["exact_fingerprint_match"] is False
+    assert evidence["shared_cwe"] is True
+    assert evidence["same_file"] is True
+    assert evidence["overlapping_lines"] is True
+    assert {"subprocess", "shell", "true"}.issubset(
+        set(evidence["shared_tokens"])
+    )
