@@ -1,4 +1,3 @@
-
 from silentsec.schemas.finding import Finding, Severity
 from silentsec.scoring.correlation import correlate_findings
 
@@ -130,7 +129,6 @@ def test_does_not_correlate_different_cwes():
     assert len(correlate_findings([first, second])) == 2
 
 
-
 def test_does_not_merge_multiple_findings_from_same_tool():
     bandit_first = make_finding(
         fingerprint="bandit-1",
@@ -154,24 +152,92 @@ def test_does_not_merge_multiple_findings_from_same_tool():
         line=10,
     )
 
-    groups = correlate_findings(
-        [bandit_first, bandit_second, semgrep]
-    )
+    groups = correlate_findings([bandit_first, bandit_second, semgrep])
 
     assert len(groups) == 2
-    assert sum(
-        group.correlation_type == "cross_tool"
-        for group in groups
-    ) == 1
+    assert sum(group.correlation_type == "cross_tool" for group in groups) == 1
 
-    cross_tool_group = next(
-        group
-        for group in groups
-        if group.correlation_type == "cross_tool"
-    )
+    cross_tool_group = next(group for group in groups if group.correlation_type == "cross_tool")
 
     assert len(cross_tool_group.findings) == 2
-    assert len(
-        {finding.tool.casefold() for finding in cross_tool_group.findings}
-    ) == 2
+    assert len({finding.tool.casefold() for finding in cross_tool_group.findings}) == 2
 
+
+def test_exact_fingerprint_group_exposes_structured_evidence():
+    first = make_finding(
+        fingerprint="shared-fingerprint",
+        tool="bandit",
+        rule_id="B602",
+        message="subprocess call with shell=True",
+    )
+    second = make_finding(
+        fingerprint="shared-fingerprint",
+        tool="semgrep",
+        rule_id="subprocess-shell-true",
+        message="different scanner wording",
+    )
+
+    groups = correlate_findings([first, second])
+
+    assert len(groups) == 1
+    group = groups[0]
+
+    assert group.correlation_type == "exact_fingerprint"
+    assert group.evidence.exact_fingerprint_match is True
+    assert group.evidence.shared_cwe is True
+    assert group.evidence.same_file is True
+    assert group.evidence.overlapping_lines is True
+    assert group.evidence.shared_tokens == []
+
+
+def test_cross_tool_group_exposes_matching_evidence():
+    bandit = make_finding(
+        fingerprint="bandit-evidence",
+        tool="bandit",
+        rule_id="B602",
+        message="subprocess call with shell=True",
+    )
+    semgrep = make_finding(
+        fingerprint="semgrep-evidence",
+        tool="semgrep",
+        rule_id="subprocess-shell-true",
+        message="subprocess call with shell=True",
+    )
+
+    groups = correlate_findings([bandit, semgrep])
+
+    assert len(groups) == 1
+    group = groups[0]
+
+    assert group.correlation_type == "cross_tool"
+    assert group.evidence.exact_fingerprint_match is False
+    assert group.evidence.shared_cwe is True
+    assert group.evidence.same_file is True
+    assert group.evidence.overlapping_lines is True
+    assert {"subprocess", "shell", "true"} <= set(group.evidence.shared_tokens)
+
+def test_exact_fingerprint_evidence_reports_location_mismatch():
+    first = make_finding(
+        fingerprint="shared-fingerprint",
+        tool="bandit",
+        rule_id="B602",
+        message="subprocess call with shell=True",
+        line=10,
+    )
+    second = make_finding(
+        fingerprint="shared-fingerprint",
+        tool="semgrep",
+        rule_id="subprocess-shell-true",
+        message="subprocess call with shell=True",
+        line=20,
+        file_path="other.py",
+    )
+
+    groups = correlate_findings([first, second])
+
+    assert len(groups) == 1
+    evidence = groups[0].evidence
+
+    assert evidence.exact_fingerprint_match is True
+    assert evidence.same_file is False
+    assert evidence.overlapping_lines is False
