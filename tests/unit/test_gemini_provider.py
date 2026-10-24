@@ -143,3 +143,23 @@ def test_triage_redacts_credentials_from_outgoing_request():
     assert "contextsecretvalue123" not in prompt
     assert "[REDACTED]" in prompt
     assert "untrusted data" in prompt
+
+def test_triage_withholds_secret_finding_from_outgoing_request():
+    finding = make_finding()
+    finding.category = FindingCategory.SECRET
+    finding.message = "Leaked token: ghp_example_sensitive_value"
+
+    client = make_client(json.dumps(make_payload(finding)))
+    provider = GeminiTriageProvider(client=client)
+
+    provider.triage(
+        finding=finding,
+        context="Token value: ghp_another_sensitive_value",
+    )
+
+    prompt = client.models.generate_content.call_args.kwargs["contents"]
+
+    assert "ghp_example_sensitive_value" not in prompt
+    assert "ghp_another_sensitive_value" not in prompt
+    assert "original value has been withheld" in prompt
+    assert "Context withheld because this is a secret finding." in prompt

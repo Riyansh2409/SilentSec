@@ -92,3 +92,15 @@ def test_withholds_context_for_secret_finding():
 
     assert "sensitive-token-value" not in result
     assert "withheld" in result.lower()
+
+
+def test_redacts_environment_variable_credentials():
+    text = (
+        "AWS_SECRET_ACCESS_KEY=example_aws_secret_value "
+        "DATABASE_URL=postgresql://app:db_password_value@localhost:5432/app"
+    )
+
+    result = redact_sensitive_text(text)
+
+    assert "example_aws_secret_value" not in result
+    assert "db_password_value" not in result

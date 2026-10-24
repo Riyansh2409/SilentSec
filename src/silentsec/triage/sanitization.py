@@ -15,9 +15,14 @@ _BEARER_RE = re.compile(
     r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}"
 )
 
+
 _ASSIGNMENT_RE = re.compile(
-    r"""(?i)["']?\b(api[_-]?key|access[_-]?token|auth[_-]?token|"""
-    r"""client[_-]?secret|password|passwd|secret|token)\b["']?"""
+    r"""(?i)["']?\b("""
+    r"api[_-]?key|access[_-]?token|auth[_-]?token|"
+    r"client[_-]?secret|password|passwd|secret|token|"
+    r"aws_secret_access_key|aws_session_token|"
+    r"database_url|db_url|connection_string"
+    r""")\b["']?"""
     r"""(\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)"""
 )
 
