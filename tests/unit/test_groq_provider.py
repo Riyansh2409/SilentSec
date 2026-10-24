@@ -162,3 +162,25 @@ def test_groq_removes_blank_list_entries():
 
     assert result.evidence == ["Scanner flagged app.py at line 10."]
     assert result.limitations == []
+
+
+def test_groq_redacts_credentials_from_outgoing_request():
+    finding = make_finding()
+    finding.message = "Unsafe request with api_key='finding-secret-value'"
+
+    client = make_client(json.dumps(make_payload(finding)))
+    provider = GroqTriageProvider(client=client)
+
+    provider.triage(
+        finding=finding,
+        context="Authorization: Bearer contextsecretvalue123",
+    )
+
+    call = client.chat.completions.create.call_args
+    system_prompt = call.kwargs["messages"][0]["content"]
+    user_content = call.kwargs["messages"][1]["content"]
+
+    assert "finding-secret-value" not in user_content
+    assert "contextsecretvalue123" not in user_content
+    assert "[REDACTED]" in user_content
+    assert "untrusted data" in system_prompt

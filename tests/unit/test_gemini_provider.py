@@ -123,3 +123,23 @@ def test_provider_requires_api_key_without_injected_client(monkeypatch):
 
     with pytest.raises(ValueError, match="GEMINI_API_KEY"):
         GeminiTriageProvider()
+
+
+def test_triage_redacts_credentials_from_outgoing_request():
+    finding = make_finding()
+    finding.message = "Unsafe request with api_key='finding-secret-value'"
+
+    client = make_client(json.dumps(make_payload(finding)))
+    provider = GeminiTriageProvider(client=client)
+
+    provider.triage(
+        finding=finding,
+        context="Authorization: Bearer contextsecretvalue123",
+    )
+
+    prompt = client.models.generate_content.call_args.kwargs["contents"]
+
+    assert "finding-secret-value" not in prompt
+    assert "contextsecretvalue123" not in prompt
+    assert "[REDACTED]" in prompt
+    assert "untrusted data" in prompt
