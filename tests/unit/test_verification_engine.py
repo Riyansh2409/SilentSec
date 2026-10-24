@@ -248,3 +248,45 @@ def test_reintroduced_finding_stays_open_on_subsequent_scan():
     identity = ("bandit", "b602", "src/app.py")
     assert identity not in history.resolved_identities
     assert identity not in history.resolved_findings
+
+
+def test_history_preserves_resolution_after_ambiguous_comparison():
+    history = VerificationHistory()
+    original = make_finding(fingerprint="original")
+
+    # A complete scan confirms the original finding is resolved.
+    first = history.compare([original], [], scan_complete=True)
+    assert first.resolved_count == 1
+
+    identity = ("bandit", "b602", "src/app.py")
+    assert identity in history.resolved_identities
+
+    # An ambiguous comparison must not erase the prior resolution.
+    duplicate_baseline = [
+        make_finding(start_line=10, fingerprint="old-1"),
+        make_finding(start_line=11, fingerprint="old-2"),
+    ]
+    duplicate_current = [
+        make_finding(start_line=10, fingerprint="new-1"),
+        make_finding(start_line=11, fingerprint="new-2"),
+    ]
+
+    ambiguous = history.compare(
+        duplicate_baseline,
+        duplicate_current,
+        scan_complete=True,
+    )
+
+    assert ambiguous.incomplete_count == 2
+    assert identity in history.resolved_identities
+
+    # With no baseline, the same identity is ambiguous again in current results.
+    # It must not be reported as reintroduced without a unique match.
+    next_report = history.compare(
+        [],
+        duplicate_current,
+        scan_complete=True,
+    )
+
+    assert next_report.reintroduced_count == 0
+    assert identity in history.resolved_identities
