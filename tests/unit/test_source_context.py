@@ -113,3 +113,48 @@ def test_enforces_file_size_limit(tmp_path: Path):
 
     assert "size limit" in context.lower()
     assert "123456789" not in context
+
+def test_rejects_symlink_resolving_outside_repository(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    outside = tmp_path / "outside.py"
+    outside.write_text(
+        "private_data = 'must not be exposed'\n",
+        encoding="utf-8",
+    )
+
+    link = repo / "linked.py"
+
+    try:
+        link.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        import pytest
+
+        pytest.skip("Symlink creation is not permitted on this system.")
+
+    context = build_source_context(
+        repo,
+        make_finding("linked.py"),
+    )
+
+    assert "outside the repository" in context
+    assert "must not be exposed" not in context
+
+
+def test_handles_line_range_beyond_end_of_file(tmp_path: Path):
+    source = tmp_path / "src" / "app.py"
+    source.parent.mkdir()
+    source.write_text(
+        "first = 1\nsecond = 2\n",
+        encoding="utf-8",
+    )
+
+    context = build_source_context(
+        tmp_path,
+        make_finding(start_line=100, end_line=120),
+    )
+
+    assert "unavailable" in context.lower()
+    assert "first = 1" not in context
+    assert "second = 2" not in context
