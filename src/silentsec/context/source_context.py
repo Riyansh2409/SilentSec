@@ -1,9 +1,9 @@
-
+﻿
 """Safely extract bounded source context for SilentSec AI triage."""
 
 from pathlib import Path, PureWindowsPath
 
-from silentsec.schemas.finding import Finding
+from silentsec.schemas.finding import Finding, FindingCategory
 from silentsec.triage.sanitization import prepare_context_for_triage
 
 DEFAULT_LINES_BEFORE = 8
@@ -74,7 +74,16 @@ def build_source_context(
     if not source_lines:
         return "Source context unavailable: file is empty."
 
-    start_line = max(1, finding.start_line)
+    if finding.category == FindingCategory.SECRET:
+        return prepare_context_for_triage(finding, "")
+
+    if finding.start_line < 1 or finding.end_line < finding.start_line:
+        return "Source context unavailable: finding line range is invalid."
+
+    if finding.start_line > len(source_lines):
+        return "Source context unavailable: finding starts beyond the end of the file."
+
+    start_line = finding.start_line
     end_line = max(start_line, finding.end_line)
 
     # Keep the total window bounded even if a finding spans many lines.
