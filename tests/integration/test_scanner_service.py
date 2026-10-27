@@ -52,7 +52,7 @@ def make_result(
     )
 
 
-def test_runs_all_three_scanners(tmp_path: Path):
+def test_runs_all_four_scanners(tmp_path: Path):
     with (
         patch(
             "silentsec.scanners.scanner_service.run_semgrep",
@@ -66,15 +66,20 @@ def test_runs_all_three_scanners(tmp_path: Path):
             "silentsec.scanners.scanner_service.run_gitleaks",
             return_value=make_result("gitleaks"),
         ) as gitleaks,
+        patch(
+            "silentsec.scanners.scanner_service.run_architecture_analyzer",
+            return_value=make_result("architecture"),
+        ) as architecture,
     ):
         report = scan_repository(tmp_path)
 
     assert report.status == ScannerStatus.SUCCESS
-    assert len(report.scanners) == 3
+    assert len(report.scanners) == 4
     assert [item.scanner for item in report.scanners] == [
         "semgrep",
         "bandit",
         "gitleaks",
+        "architecture",
     ]
     assert report.security_debt is not None
     assert report.security_debt.score == 0
@@ -84,7 +89,7 @@ def test_runs_all_three_scanners(tmp_path: Path):
     semgrep.assert_called_once()
     bandit.assert_called_once()
     gitleaks.assert_called_once()
-
+    architecture.assert_called_once()
 
 def test_one_failed_scanner_does_not_abort_others(tmp_path: Path):
     with (
@@ -104,11 +109,15 @@ def test_one_failed_scanner_does_not_abort_others(tmp_path: Path):
             "silentsec.scanners.scanner_service.run_gitleaks",
             return_value=make_result("gitleaks"),
         ),
+        patch(
+            "silentsec.scanners.scanner_service.run_architecture_analyzer",
+            return_value=make_result("architecture"),
+        ),
     ):
         report = scan_repository(tmp_path)
 
     assert report.status == ScannerStatus.PARTIAL
-    assert len(report.scanners) == 3
+    assert len(report.scanners) == 4
     assert any("simulated failure" in error for error in report.errors)
     assert report.security_debt is not None
     assert report.security_debt_complete is False
@@ -128,15 +137,60 @@ def test_scanner_exception_does_not_abort_others(tmp_path: Path):
             "silentsec.scanners.scanner_service.run_gitleaks",
             return_value=make_result("gitleaks"),
         ),
+        patch(
+            "silentsec.scanners.scanner_service.run_architecture_analyzer",
+            return_value=make_result("architecture"),
+        ),
     ):
         report = scan_repository(tmp_path)
 
     assert report.status == ScannerStatus.PARTIAL
-    assert len(report.scanners) == 3
+    assert len(report.scanners) == 4
     assert report.scanners[0].status == ScannerStatus.FAILED
     assert "simulated exception" not in str(report.errors)
     assert report.security_debt_complete is False
 
+
+def test_architecture_finding_reaches_scored_findings(tmp_path: Path):
+    finding = Finding(
+        fingerprint="architecture-complexity-1",
+        tool="silentsec-arch",
+        rule_id="SSEC-ARCH-003",
+        file_path="src/app.py",
+        start_line=10,
+        end_line=20,
+        category=FindingCategory.ARCHITECTURE,
+        severity=Severity.LOW,
+        message="Function complexity exceeds the configured threshold.",
+        confidence=0.9,
+        status=FindingStatus.OPEN,
+    )
+
+    with (
+        patch(
+            "silentsec.scanners.scanner_service.run_semgrep",
+            return_value=make_result("semgrep"),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.run_bandit",
+            return_value=make_result("bandit"),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.run_gitleaks",
+            return_value=make_result("gitleaks"),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.run_architecture_analyzer",
+            return_value=make_result("architecture", findings=[finding]),
+        ),
+    ):
+        report = scan_repository(tmp_path)
+
+    assert report.security_debt is not None
+    assert any(
+        item.finding.fingerprint == "architecture-complexity-1"
+        for item in report.security_debt.scored_findings
+    )
 
 def test_skipped_bandit_is_not_a_failure(tmp_path: Path):
     with (
@@ -151,6 +205,10 @@ def test_skipped_bandit_is_not_a_failure(tmp_path: Path):
         patch(
             "silentsec.scanners.scanner_service.run_gitleaks",
             return_value=make_result("gitleaks"),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.run_architecture_analyzer",
+            return_value=make_result("architecture"),
         ),
     ):
         report = scan_repository(tmp_path)
@@ -287,6 +345,7 @@ def make_triage_result(finding: Finding) -> TriageResult:
     )
 
 
+
 def mock_scanners(findings: list[Finding]):
     """Patch all scanners to return controlled findings."""
     return (
@@ -302,8 +361,11 @@ def mock_scanners(findings: list[Finding]):
             "silentsec.scanners.scanner_service.run_gitleaks",
             return_value=make_result("gitleaks"),
         ),
+        patch(
+            "silentsec.scanners.scanner_service.run_architecture_analyzer",
+            return_value=make_result("architecture"),
+        ),
     )
-
 
 def test_ai_triage_receives_source_context(tmp_path: Path):
     source_file = tmp_path / "src" / "app.py"

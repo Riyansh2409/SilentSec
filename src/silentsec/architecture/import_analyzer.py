@@ -30,6 +30,7 @@ class ImportDependency(BaseModel):
     imported_module: str
     imported_names: list[str] = Field(default_factory=list)
     is_relative: bool = False
+    line_number: int = 1
 
 
 class ImportAnalysisResult(BaseModel):
@@ -144,7 +145,7 @@ def analyze_python_imports(
         if path.name == "__init__.py"
     }
 
-    dependencies: set[tuple[str, str, tuple[str, ...], bool, str]] = set()
+    dependencies: set[tuple[str, str, str, tuple[str, ...], bool, int]] = set()
     skipped_files = 0
 
     for path in sorted(python_files):
@@ -185,6 +186,7 @@ def analyze_python_imports(
                                 resolved,
                                 (),
                                 False,
+                                node.lineno,
                             )
                         )
 
@@ -234,6 +236,7 @@ def analyze_python_imports(
                             resolved,
                             tuple(imported_names),
                             is_relative,
+                            node.lineno,
                         )
                     )
 
@@ -244,6 +247,7 @@ def analyze_python_imports(
             imported_module=imported_module,
             imported_names=list(imported_names),
             is_relative=is_relative,
+            line_number=line_number,
         )
         for (
             source_file,
@@ -251,6 +255,7 @@ def analyze_python_imports(
             imported_module,
             imported_names,
             is_relative,
+            line_number,
         ) in sorted(dependencies)
     ]
 

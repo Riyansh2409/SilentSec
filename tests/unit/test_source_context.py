@@ -10,8 +10,7 @@ def make_finding(
     *,
     category: FindingCategory = FindingCategory.SECURITY,
     start_line: int = 2,
-    end_line: int = 2,
-) -> Finding:
+    end_line: int | None = 2,) -> Finding:
     return Finding(
         fingerprint="context-test-fingerprint",
         tool="semgrep",
@@ -158,3 +157,19 @@ def test_handles_line_range_beyond_end_of_file(tmp_path: Path):
     assert "unavailable" in context.lower()
     assert "first = 1" not in context
     assert "second = 2" not in context
+
+
+def test_handles_none_end_line(tmp_path: Path):
+    source = tmp_path / "src" / "app.py"
+    source.parent.mkdir()
+    source.write_text(
+        "first = 1\nsecond = 2\nthird = 3\n",
+        encoding="utf-8",
+    )
+
+    context = build_source_context(
+        tmp_path,
+        make_finding(start_line=2, end_line=None),
+    )
+
+    assert "2: second = 2" in context
