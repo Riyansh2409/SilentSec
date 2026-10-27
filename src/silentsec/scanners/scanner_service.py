@@ -6,6 +6,7 @@ from time import perf_counter
 
 from pydantic import BaseModel, Field
 
+from silentsec.architecture.analyzer import run_architecture_analyzer
 from silentsec.context import build_source_context
 from silentsec.languages import detect_languages
 from silentsec.schemas import Finding
@@ -186,6 +187,7 @@ def scan_repository(
         ("semgrep", run_semgrep),
         ("bandit", run_bandit),
         ("gitleaks", run_gitleaks),
+        ("architecture", run_architecture_analyzer),
     ]
 
     results = [
