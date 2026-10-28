@@ -33,6 +33,8 @@ def test_empty_findings_have_zero_score_and_no_risk():
     assert report.score == 0
     assert report.raw_score == 0
     assert report.risk_level == RiskLevel.NONE
+    assert report.architecture_risk_level == RiskLevel.NONE
+    assert report.risk_explanation
     assert report.scored_findings == []
 
 
@@ -340,7 +342,8 @@ def test_architecture_debt_is_capped_at_25_points():
 
     assert report.architecture_debt_points == 25.0
     assert report.score == 25.0
-    assert report.risk_level != RiskLevel.CRITICAL
+    assert report.risk_level == RiskLevel.NONE
+    assert report.architecture_risk_level == RiskLevel.HIGH
     assert "capped at 25.0" in report.architecture_debt_explanation
 
 
@@ -368,7 +371,7 @@ def test_security_points_remain_unchanged_by_architecture_cap():
     assert report.security_points == 25.0
     assert report.architecture_debt_points == 25.0
     assert report.score == 50.0
-    assert report.risk_level == RiskLevel.CRITICAL
+    assert report.risk_level == RiskLevel.HIGH
 
 
 def test_maintainability_findings_share_architecture_debt_cap():
@@ -389,3 +392,96 @@ def test_maintainability_findings_share_architecture_debt_cap():
     assert report.security_points == 0.0
     assert report.score == 25.0
     assert report.risk_level != RiskLevel.CRITICAL
+
+
+
+def test_architecture_debt_does_not_raise_security_risk():
+    findings = [
+        make_finding(
+            fingerprint=f"swallowed-handler-{index}",
+            severity=Severity.CRITICAL,
+            confidence=1.0,
+            rule_id=f"ARCH{index:03}",
+            category="architecture",
+        )
+        for index in range(15)
+    ]
+
+    report = score_findings(findings)
+
+    assert report.architecture_debt_points == 25.0
+    assert report.security_points == 0.0
+    assert report.score == 25.0
+    assert report.risk_level == RiskLevel.NONE
+    assert report.architecture_risk_level == RiskLevel.HIGH
+
+
+def test_security_and_architecture_risks_are_reported_separately():
+    bandit = make_finding(
+        fingerprint="bandit-high",
+        severity=Severity.HIGH,
+        confidence=1.0,
+        rule_id="B602",
+        category="security",
+    ).model_copy(update={"tool": "bandit"})
+
+    architecture = [
+        make_finding(
+            fingerprint=f"architecture-heavy-{index}",
+            severity=Severity.CRITICAL,
+            confidence=1.0,
+            rule_id=f"ARCH{index:03}",
+            category="architecture",
+        )
+        for index in range(15)
+    ]
+
+    report = score_findings([bandit, *architecture])
+
+    assert report.security_points == 15.0
+    assert report.architecture_debt_points == 25.0
+    assert report.risk_level == RiskLevel.MODERATE
+    assert report.architecture_risk_level == RiskLevel.HIGH
+    assert report.score == 40.0
+
+
+def test_security_only_findings_keep_security_risk_behavior():
+    finding = make_finding(
+        fingerprint="security-medium",
+        severity=Severity.MEDIUM,
+        confidence=0.8,
+        category="security",
+    )
+
+    report = score_findings([finding])
+
+    assert report.security_points == 7.2
+    assert report.architecture_debt_points == 0.0
+    assert report.risk_level == RiskLevel.LOW
+    assert report.architecture_risk_level == RiskLevel.NONE
+
+
+def test_risk_explanation_mentions_both_risk_levels():
+    finding = make_finding(
+        fingerprint="security-high",
+        severity=Severity.HIGH,
+        confidence=1.0,
+        category="security",
+    )
+    architecture = [
+        make_finding(
+            fingerprint=f"architecture-{index}",
+            severity=Severity.CRITICAL,
+            confidence=1.0,
+            rule_id=f"ARCH{index:03}",
+            category="architecture",
+        )
+        for index in range(15)
+    ]
+
+    report = score_findings([finding, *architecture])
+
+    assert "MODERATE" in report.risk_explanation
+    assert "HIGH" in report.risk_explanation
+    assert "15.0 security points" in report.risk_explanation
+    assert "25.0 of 25.0 capped points" in report.risk_explanation

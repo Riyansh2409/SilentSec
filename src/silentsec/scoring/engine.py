@@ -22,6 +22,11 @@ BASE_POINTS: dict[Severity, int] = {
 DEFAULT_CONFIDENCE = 0.75
 MAX_REPOSITORY_SCORE = 100.0
 ARCHITECTURE_DEBT_CAP = 25.0
+ARCHITECTURE_RISK_THRESHOLDS = {
+    "low": 10.0,
+    "moderate": 20.0,
+    "high": 20.0,
+}
 
 
 class RiskLevel(str, Enum):
@@ -48,6 +53,8 @@ class SecurityDebtReport(BaseModel):
     score: float = Field(ge=0.0, le=MAX_REPOSITORY_SCORE)
     raw_score: float = Field(ge=0.0)
     risk_level: RiskLevel
+    architecture_risk_level: RiskLevel
+    risk_explanation: str
 
     input_findings_count: int = Field(ge=0)
     unique_open_findings_count: int = Field(ge=0)
@@ -98,6 +105,17 @@ def _risk_level_for_score(score: float) -> RiskLevel:
         return RiskLevel.HIGH
     else:
         return RiskLevel.CRITICAL
+
+
+def _architecture_risk_level_for_score(score: float) -> RiskLevel:
+    """Classify architectural debt separately; it can never be critical."""
+    if score <= 0:
+        return RiskLevel.NONE
+    if score < ARCHITECTURE_RISK_THRESHOLDS["low"]:
+        return RiskLevel.LOW
+    if score < ARCHITECTURE_RISK_THRESHOLDS["moderate"]:
+        return RiskLevel.MODERATE
+    return RiskLevel.HIGH
 
 
 def _score_finding(finding: Finding) -> ScoredFinding:
@@ -217,6 +235,18 @@ def score_findings(
         f"{architecture_debt_points:.3f} points."
     )
 
+    security_risk_level = _risk_level_for_score(security_points)
+    architecture_risk_level = _architecture_risk_level_for_score(
+        architecture_debt_points
+    )
+    risk_explanation = (
+        f"Security risk is {security_risk_level.value.upper()} based on "
+        f"{security_points:.1f} security points; architectural debt is "
+        f"{architecture_risk_level.value.upper()} "
+        f"({architecture_debt_points:.1f} of "
+        f"{ARCHITECTURE_DEBT_CAP:.1f} capped points)."
+    )
+
     highest_severity = max(
         (item.finding.severity for item in scored_findings),
         key=lambda severity: BASE_POINTS[severity],
@@ -237,7 +267,9 @@ def score_findings(
     return SecurityDebtReport(
         score=repository_score,
         raw_score=raw_score,
-        risk_level=_risk_level_for_score(repository_score),
+        risk_level=security_risk_level,
+        architecture_risk_level=architecture_risk_level,
+        risk_explanation=risk_explanation,
         input_findings_count=len(items),
         unique_open_findings_count=len(correlation_groups),
         duplicate_findings_removed=(
