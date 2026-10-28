@@ -1,4 +1,4 @@
-﻿# SilentSec
+# SilentSec
 
 AI-powered Multi-language Security Debt Intelligence Platform.
 

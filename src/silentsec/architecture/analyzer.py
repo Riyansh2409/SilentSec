@@ -77,7 +77,7 @@ def _read_python_file(path: Path, root: Path) -> str:
     if b"\x00" in content:
         raise _SkippedPythonFile("File appears to be binary")
 
-    return content.decode("utf-8")
+    return content.decode("utf-8-sig")
 
 
 def _make_finding(
@@ -223,11 +223,6 @@ def _complexity(node: ast.AST) -> int:
             score += 1
             self.generic_visit(child)
 
-        def visit_With(self, child: ast.With) -> None:
-            nonlocal score
-            score += 1
-            self.generic_visit(child)
-
         def visit_Assert(self, child: ast.Assert) -> None:
             nonlocal score
             score += 1
@@ -281,8 +276,8 @@ def _complexity(node: ast.AST) -> int:
     return score
 
 
-def _collect_module_cycles(dependencies: list) -> list[list[str]]:
-    """Return unique directed cycles, canonicalized by rotation."""
+def _collect_module_sccs(dependencies: list) -> list[list[str]]:
+    """Return cyclic strongly connected components using iterative Tarjan."""
     graph: dict[str, set[str]] = {}
 
     for dependency in dependencies:
@@ -292,24 +287,112 @@ def _collect_module_cycles(dependencies: list) -> list[list[str]]:
             graph.setdefault(source, set()).add(target)
             graph.setdefault(target, set())
 
-    cycles: set[tuple[str, ...]] = set()
+    index = 0
+    indices: dict[str, int] = {}
+    lowlinks: dict[str, int] = {}
+    tarjan_stack: list[str] = []
+    on_stack: set[str] = set()
+    components: list[list[str]] = []
 
-    def visit(start: str, current: str, path: list[str]) -> None:
-        for neighbor in sorted(graph.get(current, set())):
-            if neighbor == start and len(path) > 1:
-                rotations = [
-                    tuple(path[index:] + path[:index])
-                    for index in range(len(path))
-                ]
-                cycles.add(min(rotations))
-            elif neighbor > start and neighbor not in path:
-                visit(start, neighbor, [*path, neighbor])
+    for root in sorted(graph):
+        if root in indices:
+            continue
 
-    for start in sorted(graph):
-        visit(start, start, [start])
+        indices[root] = lowlinks[root] = index
+        index += 1
+        tarjan_stack.append(root)
+        on_stack.add(root)
+        dfs: list[tuple[str, object]] = [
+            (root, iter(sorted(graph[root])))
+        ]
 
-    return [list(cycle) for cycle in sorted(cycles)]
+        while dfs:
+            node, neighbors = dfs[-1]
+            try:
+                neighbor = next(neighbors)
+            except StopIteration:
+                dfs.pop()
 
+                if dfs:
+                    parent = dfs[-1][0]
+                    if node in on_stack:
+                        lowlinks[parent] = min(lowlinks[parent], lowlinks[node])
+
+                if lowlinks[node] == indices[node]:
+                    component: list[str] = []
+                    while True:
+                        member = tarjan_stack.pop()
+                        on_stack.remove(member)
+                        component.append(member)
+                        if member == node:
+                            break
+
+                    component.sort()
+                    if len(component) > 1 or node in graph[node]:
+                        components.append(component)
+                continue
+
+            if neighbor not in indices:
+                indices[neighbor] = lowlinks[neighbor] = index
+                index += 1
+                tarjan_stack.append(neighbor)
+                on_stack.add(neighbor)
+                dfs.append((neighbor, iter(sorted(graph[neighbor]))))
+            elif neighbor in on_stack:
+                lowlinks[node] = min(lowlinks[node], indices[neighbor])
+
+    return sorted(components)
+
+
+def _shortest_cycle_path(
+    component: list[str],
+    dependencies: list,
+) -> list[str]:
+    """Return one shortest cycle path, including the repeated closing module."""
+    members = set(component)
+    graph: dict[str, set[str]] = {member: set() for member in component}
+
+    for dependency in dependencies:
+        source = dependency.source_module
+        target = dependency.imported_module
+        if source in members and target in members:
+            graph[source].add(target)
+
+    candidates: list[tuple[str, ...]] = []
+
+    for start in component:
+        if start in graph[start]:
+            candidates.append((start, start))
+
+        for neighbor in sorted(graph[start]):
+            if neighbor == start:
+                continue
+
+            queue: list[tuple[str, list[str]]] = [(neighbor, [start, neighbor])]
+            visited = {neighbor}
+            position = 0
+
+            while position < len(queue):
+                current, path = queue[position]
+                position += 1
+
+                if current == start:
+                    candidates.append(tuple(path))
+                    break
+
+                for next_node in sorted(graph[current]):
+                    if next_node == start:
+                        candidates.append((*path, start))
+                        queue = []
+                        break
+                    if next_node not in visited:
+                        visited.add(next_node)
+                        queue.append((next_node, [*path, next_node]))
+
+    if not candidates:
+        return component
+
+    return list(min(candidates, key=lambda path: (len(path), path)))
 
 def run_architecture_analyzer(
     repo_path: str | Path,
@@ -337,6 +420,8 @@ def run_architecture_analyzer(
 
     findings: list[Finding] = []
     errors: list[str] = []
+    skipped_oversized_files = 0
+    skipped_binary_files = 0
     parsed: dict[str, ast.AST] = {}
     deadline = started + timeout_seconds
     timed_out = False
@@ -354,7 +439,11 @@ def run_architecture_analyzer(
         try:
             source = _read_python_file(path, root)
             tree = ast.parse(source, filename=relative_path)
-        except _SkippedPythonFile:
+        except _SkippedPythonFile as exc:
+            if "exceeds 256 KB limit" in str(exc):
+                skipped_oversized_files += 1
+            elif "appears to be binary" in str(exc):
+                skipped_binary_files += 1
             continue
         except (OSError, UnicodeError, SyntaxError, ValueError) as exc:
             errors.append(
@@ -433,63 +522,86 @@ def run_architecture_analyzer(
                         )
                     )
 
-    try:
-        import_result = analyze_python_imports(root)
-        cycles = _collect_module_cycles(import_result.dependencies)
-
-        for cycle in cycles:
-            # Anchor the finding to the import edge that closes this cycle.
-            source_module = cycle[-1]
-            target_module = cycle[0]
-
-            matching_dependencies = sorted(
-                (
-                    dependency
-                    for dependency in import_result.dependencies
-                    if dependency.source_module == source_module
-                    and dependency.imported_module == target_module
-                    and dependency.source_file in parsed
-                ),
-                key=lambda dependency: (
-                    dependency.source_file,
-                    dependency.line_number,
-                ),
-            )
-
-            if not matching_dependencies:
-                continue
-
-            dependency = matching_dependencies[0]
-
-            findings.append(
-                _make_finding(
-                    file_path=dependency.source_file,
-                    rule_id="SSEC-ARCH-004",
-                    start_line=dependency.line_number,
-                    end_line=dependency.line_number,
-                    category=FindingCategory.ARCHITECTURE,
-                    severity=Severity.MEDIUM,
-                    message=(
-                        "Circular import detected: "
-                        + " -> ".join([*cycle, cycle[0]])
-                    ),
-                    confidence=0.9,
-                )
-            )
-    except (OSError, ValueError) as exc:
+    if not timed_out and perf_counter() >= deadline:
         errors.append(
-            f"Import graph could not be analyzed ({type(exc).__name__})."
+            "Architecture analysis timed out before import graph analysis."
         )
+        timed_out = True
+
+    if not timed_out:
+        try:
+            import_result = analyze_python_imports(root)
+            components = _collect_module_sccs(import_result.dependencies)
+
+            for component in components:
+                cycle_path = _shortest_cycle_path(
+                    component,
+                    import_result.dependencies,
+                )
+                cycle_source = cycle_path[-2]
+                cycle_target = cycle_path[-1]
+                matching_dependencies = sorted(
+                    (
+                        dependency
+                        for dependency in import_result.dependencies
+                        if dependency.source_module == cycle_source
+                        and dependency.imported_module == cycle_target
+                        and dependency.source_file in parsed
+                    ),
+                    key=lambda dependency: (
+                        dependency.source_file,
+                        dependency.line_number,
+                    ),
+                )
+
+                if not matching_dependencies:
+                    continue
+
+                dependency = matching_dependencies[0]
+                cycle_path = _shortest_cycle_path(
+                    component,
+                    import_result.dependencies,
+                )
+
+                findings.append(
+                    _make_finding(
+                        file_path=dependency.source_file,
+                        rule_id="SSEC-ARCH-004",
+                        start_line=dependency.line_number,
+                        end_line=dependency.line_number,
+                        category=FindingCategory.ARCHITECTURE,
+                        severity=Severity.MEDIUM,
+                        message=(
+                            "Circular import detected among modules: "
+                            f"{', '.join(component)}. "
+                            "Example cycle: " + " -> ".join(cycle_path)
+                        ),
+                        confidence=0.9,
+                    )
+                )
+        except (OSError, ValueError) as exc:
+            errors.append(
+                f"Import graph could not be analyzed ({type(exc).__name__})."
+            )
 
     findings.sort(key=lambda item: (item.file_path, item.start_line, item.rule_id))
 
+    status = (
+        ScannerStatus.PARTIAL
+        if errors or timed_out
+        else ScannerStatus.SUCCESS
+    )
+
+    if skipped_oversized_files or skipped_binary_files:
+        errors.append(
+            "Informational: skipped "
+            f"{skipped_oversized_files} oversized Python file(s) and "
+            f"{skipped_binary_files} binary Python file(s)."
+        )
+
     return ScannerRunResult(
         scanner="architecture",
-        status=(
-            ScannerStatus.PARTIAL
-            if errors or timed_out
-            else ScannerStatus.SUCCESS
-        ),
+        status=status,
         findings=findings,
         duration_seconds=round(perf_counter() - started, 3),
         errors=errors,

@@ -10,6 +10,7 @@ def make_finding(
     confidence: float | None = 0.75,
     status: FindingStatus = FindingStatus.OPEN,
     rule_id: str = "TEST001",
+    category="security",
 ) -> Finding:
     return Finding(
         fingerprint=fingerprint,
@@ -18,7 +19,7 @@ def make_finding(
         file_path=f"src/{rule_id.lower()}.py",
         start_line=10,
         end_line=12,
-        category="security",
+        category=category,
         severity=severity,
         message="Test security finding",
         confidence=confidence,
@@ -322,3 +323,69 @@ def test_report_serializes_correlation_evidence():
     assert {"subprocess", "shell", "true"}.issubset(
         set(evidence["shared_tokens"])
     )
+
+def test_architecture_debt_is_capped_at_25_points():
+    findings = [
+        make_finding(
+            fingerprint=f"architecture-{index}",
+            severity=Severity.CRITICAL,
+            confidence=1.0,
+            rule_id=f"ARCH{index:03}",
+            category="architecture",
+        )
+        for index in range(15)
+    ]
+
+    report = score_findings(findings)
+
+    assert report.architecture_debt_points == 25.0
+    assert report.score == 25.0
+    assert report.risk_level != RiskLevel.CRITICAL
+    assert "capped at 25.0" in report.architecture_debt_explanation
+
+
+def test_security_points_remain_unchanged_by_architecture_cap():
+    security_finding = make_finding(
+        fingerprint="security-critical",
+        severity=Severity.CRITICAL,
+        confidence=1.0,
+        rule_id="SEC001",
+        category="security",
+    )
+    architecture_findings = [
+        make_finding(
+            fingerprint=f"architecture-{index}",
+            severity=Severity.CRITICAL,
+            confidence=1.0,
+            rule_id=f"ARCH{index:03}",
+            category="architecture",
+        )
+        for index in range(15)
+    ]
+
+    report = score_findings([security_finding, *architecture_findings])
+
+    assert report.security_points == 25.0
+    assert report.architecture_debt_points == 25.0
+    assert report.score == 50.0
+    assert report.risk_level == RiskLevel.CRITICAL
+
+
+def test_maintainability_findings_share_architecture_debt_cap():
+    findings = [
+        make_finding(
+            fingerprint=f"maintainability-{index}",
+            severity=Severity.CRITICAL,
+            confidence=1.0,
+            rule_id=f"MAINT{index:03}",
+            category="maintainability",
+        )
+        for index in range(15)
+    ]
+
+    report = score_findings(findings)
+
+    assert report.architecture_debt_points == 25.0
+    assert report.security_points == 0.0
+    assert report.score == 25.0
+    assert report.risk_level != RiskLevel.CRITICAL

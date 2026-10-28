@@ -1,4 +1,4 @@
-﻿from pathlib import Path
+from pathlib import Path
 
 from silentsec.architecture.import_analyzer import (
     analyze_python_imports,
@@ -111,3 +111,22 @@ def test_rejects_file_outside_repository(tmp_path: Path):
     outside_file = tmp_path.parent / "outside.py"
 
     assert module_name_for_file(outside_file, tmp_path) is None
+
+def test_detects_imports_in_bom_prefixed_file(tmp_path: Path):
+    (tmp_path / "app.py").write_bytes(
+        b"\xef\xbb\xbf" + b"import services\n"
+    )
+    (tmp_path / "services.py").write_text(
+        "VALUE = 1\n",
+        encoding="utf-8",
+    )
+
+    result = analyze_python_imports(tmp_path)
+
+    assert result.analyzed_files == 2
+    assert result.skipped_files == 0
+    assert any(
+        dependency.source_file == "app.py"
+        and dependency.imported_module == "services"
+        for dependency in result.dependencies
+    )

@@ -343,3 +343,109 @@ def test_timeout_returns_partial_result(tmp_path: Path, monkeypatch):
 
     assert result.status == ScannerStatus.PARTIAL
     assert any("timed out" in error.lower() for error in result.errors)
+
+def test_detects_broad_exception_in_bom_prefixed_file(tmp_path: Path):
+    content = (
+        "def run():\n"
+        "    try:\n"
+        "        work()\n"
+        "    except Exception:\n"
+        "        pass\n"
+    )
+    (tmp_path / "app.py").write_bytes(
+        b"\xef\xbb\xbf" + content.encode("utf-8")
+    )
+
+    result = run_architecture_analyzer(tmp_path)
+
+    assert "SSEC-ARCH-001" in rule_ids(result)
+    assert result.status == ScannerStatus.SUCCESS
+
+
+def test_dense_import_graph_reports_one_cycle_under_one_second(
+    tmp_path: Path,
+):
+    import time
+
+    module_names = [f"module_{index:02}" for index in range(12)]
+    for module in module_names:
+        imports = [
+            f"import {other}"
+            for other in module_names
+            if other != module
+        ]
+        write_file(tmp_path, f"{module}.py", "\n".join(imports) + "\n")
+
+    started = time.perf_counter()
+    result = run_architecture_analyzer(tmp_path)
+    elapsed = time.perf_counter() - started
+
+    cycle_findings = [
+        finding
+        for finding in result.findings
+        if finding.rule_id == "SSEC-ARCH-004"
+    ]
+    assert len(cycle_findings) == 1
+    assert all(module in cycle_findings[0].message for module in module_names)
+    assert "Example cycle:" in cycle_findings[0].message
+    assert elapsed < 1.0
+
+
+def test_with_statement_does_not_increase_cyclomatic_complexity(
+    tmp_path: Path,
+):
+    branches = "".join(
+        f"    if value == {index}:\n"
+        "        pass\n"
+        for index in range(9)
+    )
+    write_file(
+        tmp_path,
+        "app.py",
+        "def exactly_ten(value):\n"
+        "    with open('sample.txt') as handle:\n"
+        "        handle.read()\n"
+        + branches,
+    )
+
+    result = run_architecture_analyzer(tmp_path)
+
+    complexity_findings = [
+        finding
+        for finding in result.findings
+        if finding.rule_id == "SSEC-ARCH-003"
+    ]
+    assert not any(
+        "exactly_ten" in finding.message
+        for finding in complexity_findings
+    )
+
+
+def test_oversized_file_is_reported_without_partial_status(tmp_path: Path):
+    from silentsec.architecture.analyzer import MAX_FILE_BYTES
+
+    write_file(tmp_path, "app.py", "VALUE = 1\n")
+    (tmp_path / "large.py").write_bytes(b"#" * (MAX_FILE_BYTES + 1))
+
+    result = run_architecture_analyzer(tmp_path)
+
+    assert result.status == ScannerStatus.SUCCESS
+    assert any(
+        "1 oversized Python file(s)" in error
+        and "0 binary Python file(s)" in error
+        for error in result.errors
+    )
+
+
+def test_binary_file_is_reported_without_partial_status(tmp_path: Path):
+    write_file(tmp_path, "app.py", "VALUE = 1\n")
+    (tmp_path / "binary.py").write_bytes(b"VALUE = 1\x00\xff")
+
+    result = run_architecture_analyzer(tmp_path)
+
+    assert result.status == ScannerStatus.SUCCESS
+    assert any(
+        "0 oversized Python file(s)" in error
+        and "1 binary Python file(s)" in error
+        for error in result.errors
+    )

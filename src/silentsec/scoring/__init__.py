@@ -1,4 +1,4 @@
-"""Security-debt scoring public interface."""
+﻿"""Security-debt scoring public interface."""
 
 from .correlation import (
     CorrelationEvidence,
@@ -6,9 +6,6 @@ from .correlation import (
     correlate_findings,
 )
 from .engine import (
-    BASE_POINTS,
-    DEFAULT_CONFIDENCE,
-    MAX_REPOSITORY_SCORE,
     RiskLevel,
     ScoredFinding,
     SecurityDebtReport,
@@ -16,9 +13,6 @@ from .engine import (
 )
 
 __all__ = [
-    "BASE_POINTS",
-    "DEFAULT_CONFIDENCE",
-    "MAX_REPOSITORY_SCORE",
     "CorrelationEvidence",
     "CorrelationGroup",
     "RiskLevel",

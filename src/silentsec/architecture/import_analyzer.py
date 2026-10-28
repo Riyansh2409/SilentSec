@@ -1,4 +1,4 @@
-﻿"""Extract repository-local Python import dependencies."""
+"""Extract repository-local Python import dependencies."""
 
 import ast
 import os
@@ -154,7 +154,7 @@ def analyze_python_imports(
         source_is_package = path.name == "__init__.py"
 
         try:
-            source = path.read_text(encoding="utf-8")
+            source = path.read_text(encoding="utf-8-sig")
             tree = ast.parse(source, filename=str(relative_path))
         except (OSError, UnicodeError, SyntaxError, ValueError):
             skipped_files += 1
