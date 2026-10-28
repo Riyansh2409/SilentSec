@@ -17,6 +17,8 @@ that accumulate hidden debt in AI-assisted codebases.
 
 ## Architectural Debt Analyzer
 
+Architecture debt is capped at 25 points and reported as a separate risk level; it never raises the security risk level.
+
 The architecture analyzer detects the following patterns in Python code:
 
 - **SSEC-ARCH-001:** Broad exception handlers, such as bare `except` and handlers catching `Exception` or `BaseException`.
