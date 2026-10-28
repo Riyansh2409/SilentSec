@@ -662,3 +662,69 @@ def test_language_detection_failure_marks_verification_incomplete(
     assert report.verification_report.resolved_count == 0
     assert report.verification_report.results[0].status == (VerificationStatus.INCOMPLETE)
     assert not history.resolved_identities
+
+def test_scan_report_includes_recurrence_components_and_density(tmp_path: Path):
+    (tmp_path / "app.py").write_text(
+        "import os\nvalue = 1\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "other.py").write_text(
+        "import sys\nvalue = 2\n",
+        encoding="utf-8",
+    )
+
+    findings = [
+        Finding(
+            fingerprint=f"repeat-{index}",
+            tool="test-scanner",
+            rule_id="REPEATED001",
+            file_path=file_path,
+            start_line=1,
+            end_line=1,
+            category=FindingCategory.SECURITY,
+            severity=Severity.MEDIUM,
+            message="Repeated test finding",
+            confidence=0.8,
+            status=FindingStatus.OPEN,
+        )
+        for index, file_path in enumerate(
+            ["app.py", "other.py"],
+            start=1,
+        )
+    ]
+
+    with (
+        patch(
+            "silentsec.scanners.scanner_service.run_semgrep",
+            return_value=make_result("semgrep", findings=findings),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.run_bandit",
+            return_value=make_result("bandit"),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.run_gitleaks",
+            return_value=make_result("gitleaks"),
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.run_architecture_analyzer",
+            return_value=make_result("architecture"),
+        ),
+    ):
+        report = scan_repository(tmp_path)
+
+    assert report.security_debt is not None
+    debt = report.security_debt
+
+    assert debt.recurring_patterns
+    assert any(
+        pattern.occurrence_count == 2 and pattern.file_count == 2
+        for pattern in debt.recurring_patterns
+    )
+    assert {component.name for component in debt.components} >= {
+        "security_severity",
+        "architectural_fragility",
+        "recurrence",
+    }
+    assert debt.analyzed_lines == 4
+    assert debt.debt_density_per_kloc == 500.0
