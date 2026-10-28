@@ -30,6 +30,33 @@ Analysis uses Python AST parsing and does not execute repository code. Oversized
 
 Duplicate-logic detection and coupling-hotspot analysis are planned capabilities, not implemented features.
 
+## Explainable Score
+
+SilentSec reports a deterministic security-debt score alongside a breakdown of its contributing components. Existing score, raw score, per-finding scores, and security risk calculations remain unchanged.
+
+### Score Components
+
+- **`security_severity`**: Points from security and secret findings using the existing severity and confidence formula.
+- **`architectural_fragility`**: Architecture and maintainability debt points, capped at 25. Architecture risk is reported separately and does not raise the security risk level.
+- **`other_findings`**: Points from findings outside the security, secret, architecture, and maintainability categories.
+- **`score_cap_adjustment`**: An adjustment, when needed, that reconciles the component total with the existing repository score cap.
+- **`recurrence`**: Informational points based on recurring patterns spanning multiple files. Each additional file contributes 2 points, capped at 15. This component is informational and is not added to the repository score.
+
+The sum of non-informational score components equals the reported repository score. Informational recurrence points do not change the score or risk level.
+
+### Repository Size Awareness
+
+When a repository root is provided, the report includes:
+
+- **`analyzed_lines`**: Number of nonblank lines in eligible source files, using the analyzer's directory exclusions and file-size limit. Files are inspected as text and repository code is never executed for line counting.
+- **`debt_density_per_kloc`**: Number of unique open correlation groups per 1,000 analyzed nonblank source lines, rounded to two decimal places. A repository with zero analyzed lines reports `0.0`. If no repository root is provided, both fields are `None`.
+
+### Remediation Effort
+
+Each scored finding has a separate remediation-effort estimate: **`low`**, **`medium`**, or **`high`**. Estimates use a documented static rule table for secrets, selected architecture rules, and selected injection CWEs; other findings default to `low`.
+
+Remediation effort is informational. It does not affect per-finding scores, the repository score, or either risk level. The report also includes counts grouped by remediation effort.
+
 ## Planned Capabilities
 
 - Broader multi-language architectural analysis.
