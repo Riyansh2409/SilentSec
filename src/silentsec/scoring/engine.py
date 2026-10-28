@@ -7,7 +7,7 @@ from enum import Enum
 from pydantic import BaseModel, Field
 
 from silentsec.architecture.import_analyzer import analyze_python_imports
-from silentsec.schemas.finding import Finding, FindingStatus, Severity
+from silentsec.schemas.finding import Finding, FindingCategory, FindingStatus, Severity
 from silentsec.scoring.correlation import CorrelationGroup, correlate_findings
 
 # These are SilentSec v1 product heuristics, not an industry standard.
@@ -21,6 +21,7 @@ BASE_POINTS: dict[Severity, int] = {
 
 DEFAULT_CONFIDENCE = 0.75
 MAX_REPOSITORY_SCORE = 100.0
+ARCHITECTURE_DEBT_CAP = 25.0
 
 
 class RiskLevel(str, Enum):
@@ -59,6 +60,9 @@ class SecurityDebtReport(BaseModel):
     highest_severity: Severity | None = None
     scored_findings: list[ScoredFinding] = Field(default_factory=list)
     correlation_groups: list[CorrelationGroup] = Field(default_factory=list)
+    architecture_debt_points: float = Field(default=0.0, ge=0.0, le=ARCHITECTURE_DEBT_CAP)
+    security_points: float = Field(default=0.0, ge=0.0)
+    architecture_debt_explanation: str = "Architecture and maintainability contributions are capped at 25.0 points."
 
 
 
@@ -166,8 +170,52 @@ def score_findings(
         )
     )
 
-    raw_score = round(sum(item.score for item in scored_findings), 3)
+    architecture_categories = {
+        FindingCategory.ARCHITECTURE,
+        FindingCategory.MAINTAINABILITY,
+    }
+    architecture_raw_points = round(
+        sum(
+            item.score
+            for item in scored_findings
+            if item.finding.category in architecture_categories
+        ),
+        3,
+    )
+    architecture_debt_points = round(
+        min(architecture_raw_points, ARCHITECTURE_DEBT_CAP),
+        3,
+    )
+    security_points = round(
+        sum(
+            item.score
+            for item in scored_findings
+            if item.finding.category
+            in {FindingCategory.SECURITY, FindingCategory.SECRET}
+        ),
+        3,
+    )
+    other_points = round(
+        sum(
+            item.score
+            for item in scored_findings
+            if item.finding.category not in architecture_categories
+            and item.finding.category
+            not in {FindingCategory.SECURITY, FindingCategory.SECRET}
+        ),
+        3,
+    )
+    raw_score = round(
+        architecture_debt_points + security_points + other_points,
+        3,
+    )
     repository_score = round(min(raw_score, MAX_REPOSITORY_SCORE), 3)
+    architecture_debt_explanation = (
+        f"Architecture and maintainability findings contribute "
+        f"{architecture_raw_points:.3f} raw points; capped at "
+        f"{ARCHITECTURE_DEBT_CAP:.1f}, resulting in "
+        f"{architecture_debt_points:.3f} points."
+    )
 
     highest_severity = max(
         (item.finding.severity for item in scored_findings),
@@ -200,6 +248,9 @@ def score_findings(
         highest_severity=highest_severity,
         scored_findings=scored_findings,
         correlation_groups=correlation_groups,
+        architecture_debt_points=architecture_debt_points,
+        security_points=security_points,
+        architecture_debt_explanation=architecture_debt_explanation,
         exact_duplicates_removed=exact_duplicates_removed,
         cross_tool_duplicates_removed=cross_tool_duplicates_removed,
     )
