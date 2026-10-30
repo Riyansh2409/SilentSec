@@ -214,3 +214,31 @@ def test_scan_triage_cache_flag(tmp_path: Path):
 
         cli.main(["scan", str(tmp_path), "--no-triage-cache"])
         assert scan.call_args.kwargs["use_triage_cache"] is False
+
+
+def test_capped_scan_score_shows_uncapped_value(tmp_path: Path, capsys):
+    result = make_result(tmp_path, complete=True)
+    debt = result.security_debt.model_copy(update={"score": 100.0, "raw_score": 132.5})
+    result = result.model_copy(update={"security_debt": debt})
+
+    with patch.object(cli, "scan_repository", return_value=result):
+        cli.main(["scan", str(tmp_path)])
+
+    assert "Score: 100.0 / 100  (uncapped 132.5; the score is capped at 100)" in capsys.readouterr().out
+
+
+def test_capped_verify_score_shows_uncapped_change(tmp_path: Path, capsys):
+    patch_file = write_patch(tmp_path, PATCH.encode())
+    report = make_report(FixVerdict.VERIFIED_FIX).model_copy(
+        update={
+            "score_before": 100.0,
+            "score_after": 100.0,
+            "raw_score_before": 140.0,
+            "raw_score_after": 118.6,
+        }
+    )
+
+    with patch.object(cli, "verify_fix", return_value=report):
+        cli.main(["verify", str(tmp_path), "--patch", str(patch_file)])
+
+    assert "Score: 100.0 -> 100.0  (uncapped 140.0 -> 118.6)" in capsys.readouterr().out

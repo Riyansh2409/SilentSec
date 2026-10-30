@@ -145,6 +145,14 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _score_line(score: float, raw_score: float) -> str:
+    """The capped score, plus the uncapped value when the cap hides it."""
+    line = f"Score: {score:.1f} / 100"
+    if raw_score > score:
+        line += f"  (uncapped {raw_score:.1f}; the score is capped at 100)"
+    return line
+
+
 def format_summary(result: RepositoryScanResult, *, top: int = 10) -> str:
     """Render a short, human-readable report."""
     lines = [f"SilentSec scan: {result.repo_path}", ""]
@@ -164,7 +172,7 @@ def format_summary(result: RepositoryScanResult, *, top: int = 10) -> str:
         architecture_risk = debt.architecture_risk_level.value.upper()
         lines += [
             "",
-            f"Score: {debt.score:.1f} / 100",
+            _score_line(debt.score, debt.raw_score),
             f"Security risk: {security_risk}   Architecture debt: {architecture_risk}",
             (
                 f"Unique issues: {debt.unique_open_findings_count} "
@@ -230,7 +238,11 @@ def format_verification(report: FixVerificationReport) -> str:
     lines += [f"  {reason}" for reason in report.reasons]
 
     if report.score_before is not None and report.score_after is not None:
-        lines += ["", f"Score: {report.score_before:.1f} -> {report.score_after:.1f}"]
+        score_change = f"Score: {report.score_before:.1f} -> {report.score_after:.1f}"
+        raw_before, raw_after = report.raw_score_before, report.raw_score_after
+        if raw_before is not None and raw_after is not None and max(raw_before, raw_after) > 100:
+            score_change += f"  (uncapped {raw_before:.1f} -> {raw_after:.1f})"
+        lines += ["", score_change]
 
     def section(title: str, items: list[FindingSummary]) -> None:
         if not items:
