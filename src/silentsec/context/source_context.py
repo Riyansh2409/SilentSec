@@ -1,4 +1,4 @@
-﻿
+
 """Safely extract bounded source context for SilentSec AI triage."""
 
 from pathlib import Path, PureWindowsPath

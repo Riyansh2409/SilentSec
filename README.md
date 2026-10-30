@@ -1,6 +1,7 @@
 # SilentSec
 
-AI-powered Multi-language Security Debt Intelligence Platform.
+Explainable security and architectural debt intelligence for AI-assisted code.
+**Python-first:** the full pipeline is built and tested on Python repositories.
 
 ## Vision
 
@@ -9,11 +10,63 @@ that accumulate hidden debt in AI-assisted codebases.
 
 ## Current Capabilities
 
-- Multi-language security scanning using Semgrep, Bandit, and Gitleaks.
+- Security scanning with Semgrep, Bandit, and Gitleaks, normalized into one finding format.
 - Security finding correlation and deterministic security-debt scoring.
 - Safe source-context extraction.
 - AI-assisted triage and finding verification.
 - Architectural debt analysis using Python AST parsing.
+
+## Installation
+
+Requires Python 3.11+.
+
+```powershell
+git clone https://github.com/Riyansh2409/SilentSec.git
+cd SilentSec
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1          # macOS/Linux: source .venv/bin/activate
+python -m pip install -e ".[dev,scanners]"
+```
+
+`[scanners]` installs Semgrep and Bandit. Gitleaks is a separate binary: install
+it from the [Gitleaks releases](https://github.com/gitleaks/gitleaks/releases)
+(tested with 8.21.2) and make sure `gitleaks version` works in your terminal.
+
+AI triage is optional. To enable it, copy `.env.example` to `.env` (or set the
+variables in your shell) and fill in your own keys. Never commit real keys.
+
+## Usage
+
+```powershell
+silentsec scan path\to\repository
+silentsec scan path\to\repository --json report.json
+silentsec scan path\to\repository --ai-triage --max-ai-findings 10
+```
+
+The command prints scanner statuses, the score with both risk levels, top
+findings, and recurring patterns. `--json` writes the full report.
+
+Exit codes: `0` when every scanner succeeded, `2` when the scan is incomplete
+(for example, a scanner is not installed), `64` for usage errors. An incomplete
+scan still returns findings and a score, but verification will not confirm any
+finding as resolved.
+
+## Scanners
+
+| Scanner | Finds | Notes |
+|---|---|---|
+| Semgrep | Code-level vulnerabilities | Uses SilentSec's bundled offline rules in `src/silentsec/rules/semgrep/`; no internet needed. Set `SILENTSEC_SEMGREP_CONFIG` to use another ruleset (registry rulesets such as `p/security-audit` need network access). |
+| Bandit | Python security issues | Runs only when the repository has Python files. |
+| Gitleaks | Hard-coded secrets | Secret values are redacted and never sent to AI providers. |
+| Architecture analyzer | Structural debt | See below. |
+
+Scanners never execute repository code and never write into the scanned
+repository. The bundled Semgrep rules are a focused starter set for Python, not
+a replacement for the full Semgrep registry.
+
+When different tools report the same issue, SilentSec merges them: matching CWE
+on overlapping lines across tools, and equivalent exception-handler rules
+(Bandit B110/B112, SSEC-ARCH-001/002) on the same handler.
 
 ## Architectural Debt Analyzer
 
@@ -49,7 +102,7 @@ The sum of non-informational score components equals the reported repository sco
 When a repository root is provided, the report includes:
 
 - **`analyzed_lines`**: Number of nonblank lines in eligible source files, using the analyzer's directory exclusions and file-size limit. Files are inspected as text and repository code is never executed for line counting.
-- **`debt_density_per_kloc`**: Number of unique open correlation groups per 1,000 analyzed nonblank source lines, rounded to two decimal places. A repository with zero analyzed lines reports `0.0`. If no repository root is provided, both fields are `None`.
+- **`debt_density_per_kloc`**: Number of unique open correlation groups per 1,000 analyzed nonblank source lines, rounded to two decimal places. Density is `None` for repositories with fewer than 500 analyzed lines, where a handful of findings would look like an alarming rate. If no repository root is provided, both fields are `None`.
 
 ### Remediation Effort
 
@@ -64,7 +117,14 @@ Remediation effort is informational. It does not affect per-finding scores, the 
 - LangSmith tracing and evaluation.
 - Security-debt history across Git commits.
 - AI-assisted fix proposals.
-- Docker and GitHub Actions CI/CD.
+- Docker packaging.
+
+## Continuous Integration
+
+GitHub Actions runs Ruff and the test suite on every push and pull request,
+plus a smoke job that installs the real scanners (Gitleaks pinned and
+checksum-verified), runs the real-scanner tests, and checks that a full scan
+completes without modifying the repository.
 
 ## Status
 

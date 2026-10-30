@@ -1,4 +1,4 @@
-﻿"""Security-debt scoring public interface."""
+"""Security-debt scoring public interface."""
 
 from .correlation import (
     CorrelationEvidence,
