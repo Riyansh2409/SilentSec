@@ -7,6 +7,7 @@ from hashlib import sha256
 from pathlib import Path
 from time import perf_counter
 
+from silentsec.architecture.duplicates import find_duplicate_functions
 from silentsec.architecture.import_analyzer import analyze_python_imports
 from silentsec.scanners.results import ScannerRunResult, ScannerStatus
 from silentsec.schemas import Finding, FindingCategory, Severity
@@ -394,6 +395,43 @@ def _shortest_cycle_path(
 
     return list(min(candidates, key=lambda path: (len(path), path)))
 
+MAX_DUPLICATES_LISTED = 5
+
+
+def _duplicate_findings(parsed: dict[str, ast.AST]) -> list[Finding]:
+    """One SSEC-ARCH-005 finding per group of structurally identical functions."""
+    findings: list[Finding] = []
+
+    for group in find_duplicate_functions(parsed):
+        first, *others = group.functions
+        listed = ", ".join(
+            f"{other.name!r} at {other.file_path}:{other.start_line}"
+            for other in others[:MAX_DUPLICATES_LISTED]
+        )
+        if len(others) > MAX_DUPLICATES_LISTED:
+            listed += f", and {len(others) - MAX_DUPLICATES_LISTED} more"
+
+        findings.append(
+            _make_finding(
+                file_path=first.file_path,
+                rule_id="SSEC-ARCH-005",
+                start_line=first.start_line,
+                end_line=first.end_line,
+                category=FindingCategory.MAINTAINABILITY,
+                severity=Severity.LOW,
+                message=(
+                    f"Function {first.name!r} has the same structure as "
+                    f"{len(others)} other function(s): {listed}. "
+                    f"Normalized AST match ({group.statement_count} statements; "
+                    "names, literals, docstrings and type hints ignored)."
+                ),
+                confidence=0.8,
+            )
+        )
+
+    return findings
+
+
 def run_architecture_analyzer(
     repo_path: str | Path,
     timeout_seconds: int = 180,
@@ -583,6 +621,13 @@ def run_architecture_analyzer(
             errors.append(
                 f"Import graph could not be analyzed ({type(exc).__name__})."
             )
+
+    if not timed_out and perf_counter() >= deadline:
+        errors.append("Architecture analysis timed out before duplicate detection.")
+        timed_out = True
+
+    if not timed_out:
+        findings.extend(_duplicate_findings(parsed))
 
     findings.sort(key=lambda item: (item.file_path, item.start_line, item.rule_id))
 
