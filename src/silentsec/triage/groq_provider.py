@@ -39,6 +39,11 @@ class GroqTriageProvider:
         )
         self._client = client or Groq(api_key=resolved_key)
 
+    @property
+    def model(self) -> str:
+        """Model name, used to keep cache entries per model."""
+        return self._model
+
     def triage(
         self,
         *,

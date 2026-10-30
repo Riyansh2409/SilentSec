@@ -11,6 +11,7 @@ from silentsec.schemas.finding import (
 )
 from silentsec.scoring import RiskLevel
 from silentsec.triage import TriagePriority, TriageResult
+from silentsec.triage.router import TriageRouter
 from silentsec.verification import VerificationHistory, VerificationStatus
 
 
@@ -729,3 +730,45 @@ def test_scan_report_includes_recurrence_components_and_density(tmp_path: Path):
     assert debt.analyzed_lines == 4
     # A 4-line repository is below MIN_LINES_FOR_DENSITY, so density is withheld.
     assert debt.debt_density_per_kloc is None
+
+
+def test_triage_budget_stops_cleanly_and_reports_counts(tmp_path: Path):
+    findings = [make_finding(fingerprint=f"budget-{index}") for index in range(4)]
+
+    class Provider:
+        def triage(self, *, finding, context=""):
+            return TriageResult(
+                finding_id=finding.finding_id,
+                fingerprint=finding.fingerprint,
+                priority=TriagePriority.LOW,
+                summary="s",
+                rationale="r",
+                remediation_steps=["fix"],
+            )
+
+    router = TriageRouter([("p", Provider())], max_provider_calls=2)
+
+    with (
+        patch(
+            "silentsec.scanners.scanner_service.run_semgrep",
+            return_value=make_result("semgrep", findings=findings),
+        ),
+        patch("silentsec.scanners.scanner_service.run_bandit", return_value=make_result("bandit")),
+        patch(
+            "silentsec.scanners.scanner_service.run_gitleaks", return_value=make_result("gitleaks")
+        ),
+        patch(
+            "silentsec.scanners.scanner_service.run_architecture_analyzer",
+            return_value=make_result("architecture"),
+        ),
+        patch("silentsec.scanners.scanner_service.build_default_router", return_value=router),
+    ):
+        report = scan_repository(tmp_path, enable_ai_triage=True)
+
+    assert len(report.triage_results) == 2
+    assert report.triage_provider_calls == 2
+    assert not report.triage_complete
+    assert any("budget" in error for error in report.triage_errors)
+    # Deterministic results are untouched by the triage budget.
+    assert len(report.findings) == 4
+    assert report.security_debt is not None

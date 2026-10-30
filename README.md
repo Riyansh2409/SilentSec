@@ -36,6 +36,22 @@ it from the [Gitleaks releases](https://github.com/gitleaks/gitleaks/releases)
 AI triage is optional. To enable it, copy `.env.example` to `.env` (or set the
 variables in your shell) and fill in your own keys. Never commit real keys.
 
+How AI triage spends API quota:
+
+- Each finding goes to one provider at a time (Gemini primary, Gemini
+  fallback, then Groq). A timeout, connection error, or HTTP 408/429/5xx is
+  retried once on the same provider with backoff; authentication and request
+  errors move straight to the next provider.
+- A scan makes at most `3 × --max-ai-findings` provider calls in total.
+- Results are cached in `~/.cache/silentsec/triage` (override with
+  `SILENTSEC_TRIAGE_CACHE_DIR`, disable with `SILENTSEC_TRIAGE_CACHE=off` or
+  `--no-triage-cache`). The cache key is the finding fingerprint, a hash of the
+  redacted message and source context, the prompt version, and the provider
+  models, so changed code or a different model is triaged again. The cache
+  holds triage text derived from your code; delete the folder to clear it.
+- If triage fails, findings and the score are unaffected; the report marks
+  triage incomplete.
+
 ## Usage
 
 ```powershell
