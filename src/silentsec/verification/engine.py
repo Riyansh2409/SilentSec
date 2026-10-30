@@ -16,6 +16,7 @@ class VerificationStatus(str, Enum):
     RESOLVED = "resolved"
     REINTRODUCED = "reintroduced"
     INCOMPLETE = "incomplete"
+    NEW = "new"
 
 
 class FindingVerification(BaseModel):
@@ -34,6 +35,13 @@ class VerificationReport(BaseModel):
     baseline_count: int = Field(ge=0)
     current_count: int = Field(ge=0)
     scan_complete: bool
+    # Current findings with no baseline counterpart. Only populated for a
+    # complete scan; an incomplete scan cannot show that a finding is new.
+    new_findings: list[Finding] = Field(default_factory=list)
+
+    @property
+    def new_count(self) -> int:
+        return len(self.new_findings)
 
     @property
     def resolved_count(self) -> int:
@@ -132,7 +140,23 @@ class VerificationHistory(BaseModel):
 
             self.resolved_identities.discard(identity)
             self.resolved_findings.pop(identity, None)
-        return report.model_copy(update={"results": results})
+
+        # A finding reported as REINTRODUCED is not also NEW.
+        reintroduced = {
+            result.current_finding.fingerprint
+            for result in results
+            if result.status == VerificationStatus.REINTRODUCED
+            and result.current_finding is not None
+        }
+        new_findings = [
+            finding
+            for finding in report.new_findings
+            if finding.fingerprint not in reintroduced
+        ]
+
+        return report.model_copy(
+            update={"results": results, "new_findings": new_findings}
+        )
 
 
 def _normalized_path(path: str) -> str:
@@ -274,4 +298,58 @@ def compare_findings(
         baseline_count=len(baseline),
         current_count=len(current),
         scan_complete=scan_complete,
+        new_findings=_detect_new_findings(baseline, current) if scan_complete else [],
     )
+
+
+def _detect_new_findings(
+    baseline: list[Finding],
+    current: list[Finding],
+) -> list[Finding]:
+    """Return current findings that outnumber their baseline identity.
+
+    Identity is (tool, rule, file), as for the rest of verification. When an
+    identity occurs more often now than in the baseline, the surplus is new.
+    Findings whose line range did not exist in the baseline are preferred as
+    the new ones; ties are broken deterministically.
+    """
+    baseline_by_identity: dict[tuple[str, str, str], list[Finding]] = {}
+    for finding in baseline:
+        baseline_by_identity.setdefault(_identity(finding), []).append(finding)
+
+    current_by_identity: dict[tuple[str, str, str], list[Finding]] = {}
+    for finding in current:
+        current_by_identity.setdefault(_identity(finding), []).append(finding)
+
+    new_findings: list[Finding] = []
+
+    for identity in sorted(current_by_identity):
+        candidates = sorted(
+            current_by_identity[identity],
+            key=lambda finding: (
+                finding.start_line,
+                finding.end_line or finding.start_line,
+                finding.fingerprint,
+            ),
+        )
+        previous = baseline_by_identity.get(identity, [])
+        surplus = len(candidates) - len(previous)
+
+        if surplus <= 0:
+            continue
+
+        previous_ranges = {
+            (finding.start_line, finding.end_line or finding.start_line)
+            for finding in previous
+        }
+        unmatched = [
+            finding
+            for finding in candidates
+            if (finding.start_line, finding.end_line or finding.start_line)
+            not in previous_ranges
+        ]
+        matched = [finding for finding in candidates if finding not in unmatched]
+
+        new_findings.extend((unmatched + matched)[:surplus])
+
+    return new_findings

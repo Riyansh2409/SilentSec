@@ -15,6 +15,7 @@ that accumulate hidden debt in AI-assisted codebases.
 - Safe source-context extraction.
 - AI-assisted triage and finding verification.
 - Architectural debt analysis using Python AST parsing.
+- Fix + Verify: check a proposed patch in an isolated copy and report what it fixed and broke.
 
 ## Installation
 
@@ -110,13 +111,69 @@ Each scored finding has a separate remediation-effort estimate: **`low`**, **`me
 
 Remediation effort is informational. It does not affect per-finding scores, the repository score, or either risk level. The report also includes counts grouped by remediation effort.
 
+## Fix + Verify
+
+`silentsec verify` checks whether a proposed patch actually fixes findings,
+without changing your repository:
+
+```powershell
+# Make the fix in a working tree, then export it as a patch.
+git diff --output=fix.diff
+
+# Verify it against the repository.
+silentsec verify path\to\repository --patch fix.diff
+silentsec verify path\to\repository --patch fix.diff --run-tests --json verify.json
+```
+
+Use `git diff --output=fix.diff` rather than `git diff > fix.diff`: in Windows
+PowerShell the redirect re-encodes the file. SilentSec accepts UTF-16 and CRLF
+patches anyway and says so in the report.
+
+What happens:
+
+1. The patch is validated. Absolute paths, `..`, `.git/`, binary patches, file
+   mode changes, symlinks, renames, and patches over 20 files or 200 KB are
+   rejected.
+2. The repository is copied to a temporary folder, without `.git`, virtual
+   environments, build and cache folders, local `.env` files, or symlinks.
+3. The copy is scanned (baseline), the patch is applied to the copy with
+   `git apply`, and the copy is scanned again. Both scans see the same files.
+4. With `--run-tests` (or `--test-command "..."`), the repository's tests run in
+   the copy, with a timeout and with credential-like environment variables
+   removed. **This executes repository code**, so it is off by default.
+5. The temporary copy is deleted.
+
+**Targets** are the findings the patch is meant to fix: by default, findings on
+the lines the patch changes. Pass `--target FINGERPRINT` (from a
+`silentsec scan --json` report) to choose them explicitly.
+
+| Verdict | Meaning | Exit code |
+|---|---|---|
+| `VERIFIED_FIX` | Every target resolved; no new finding at medium severity or above; tests passed or were not run | 0 |
+| `PARTIAL` | Some targets resolved, some remain | 1 |
+| `UNRESOLVED` | No target resolved | 1 |
+| `REGRESSION` | A new finding at medium severity or above appeared, or the tests failed | 1 |
+| `NOT_VERIFIED` | The result could not be established: invalid patch, patch did not apply, a scanner did not complete, tests timed out, or no targets | 2 |
+
+New findings below medium severity are still listed under "New" and in the
+reasons; `--strict` makes any new finding a regression.
+
+Limitations, also printed with every report:
+
+- Passing scans and tests do not prove the absence of vulnerabilities.
+- Isolation is file-level, not a security sandbox: commands in the copy run as
+  the current user with network access (credential-like variables removed).
+- Files that are not copied (local `.env` files, virtual environments, build
+  and cache folders) are not verified.
+- Git must be installed and on `PATH`.
+
 ## Planned Capabilities
 
 - Broader multi-language architectural analysis.
 - MCP tools for controlled analysis operations.
 - LangSmith tracing and evaluation.
 - Security-debt history across Git commits.
-- AI-assisted fix proposals.
+- AI-generated fix proposals feeding `silentsec verify` (verification itself is implemented).
 - Docker packaging.
 
 ## Continuous Integration
