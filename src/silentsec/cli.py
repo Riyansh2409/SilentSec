@@ -1,16 +1,23 @@
-"""Command-line entry point: ``silentsec scan <path>``."""
+"""Command-line entry point: ``silentsec scan`` and ``silentsec verify``."""
 
 import argparse
+import os
+import shlex
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from silentsec.remediation import FindingSummary, FixVerdict, FixVerificationReport, verify_fix
+from silentsec.remediation.verify import DEFAULT_REGRESSION_SEVERITY
 from silentsec.scanners.results import ScannerStatus
 from silentsec.scanners.scanner_service import RepositoryScanResult, scan_repository
+from silentsec.schemas import Severity
 
-# Exit codes let CI pipelines react to the scan outcome.
-EXIT_OK = 0
-EXIT_SCAN_INCOMPLETE = 2
+# Exit codes let CI pipelines react to the outcome.
+EXIT_OK = 0  # scan: every scanner succeeded / verify: VERIFIED_FIX
+EXIT_FIX_NOT_CONFIRMED = 1  # verify: PARTIAL, UNRESOLVED or REGRESSION
+EXIT_SCAN_INCOMPLETE = 2  # scan: incomplete
+EXIT_NOT_VERIFIED = 2  # verify: NOT_VERIFIED
 EXIT_USAGE_ERROR = 64
 
 
@@ -51,6 +58,55 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=10,
         help="Number of top findings to print (default: 10).",
+    )
+
+    verify = subcommands.add_parser(
+        "verify",
+        help="Apply a patch to an isolated copy and check whether it fixes findings.",
+    )
+    verify.add_argument("path", type=Path, help="Repository folder (never modified).")
+    verify.add_argument(
+        "--patch",
+        type=Path,
+        required=True,
+        help="Unified diff to verify, e.g. from 'git diff --output=fix.diff'.",
+    )
+    verify.add_argument(
+        "--target",
+        dest="targets",
+        action="append",
+        metavar="FINGERPRINT",
+        help=(
+            "Fingerprint of a finding the patch should fix (repeatable). "
+            "Default: every finding in a file the patch touches."
+        ),
+    )
+    verify.add_argument(
+        "--run-tests",
+        action="store_true",
+        help="Also run the repository's tests in the copy. This executes repository code.",
+    )
+    verify.add_argument(
+        "--test-command",
+        help='Test command to run instead of "python -m pytest -q" (implies --run-tests).',
+    )
+    verify.add_argument(
+        "--strict",
+        action="store_true",
+        help="Treat any new finding as a regression (default: medium severity or higher).",
+    )
+    verify.add_argument("--json", dest="json_path", type=Path, help="Write the report as JSON.")
+    verify.add_argument(
+        "--timeout",
+        type=int,
+        default=180,
+        help="Per-scanner timeout in seconds (default: 180).",
+    )
+    verify.add_argument(
+        "--test-timeout",
+        type=int,
+        default=300,
+        help="Test command timeout in seconds (default: 300).",
     )
     return parser
 
@@ -112,9 +168,109 @@ def format_summary(result: RepositoryScanResult, *, top: int = 10) -> str:
     return "\n".join(lines)
 
 
+def read_patch_file(path: Path) -> str:
+    """Read a patch, accepting the encodings Windows tools commonly produce.
+
+    In Windows PowerShell 5, ``git diff > fix.diff`` writes UTF-16 with a
+    byte-order mark, which ``git apply`` cannot read directly.
+    """
+    data = path.read_bytes()
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16")
+    if data.startswith(b"\xef\xbb\xbf"):
+        return data[3:].decode("utf-8")
+    return data.decode("utf-8")
+
+
+def format_verification(report: FixVerificationReport) -> str:
+    """Render a Fix + Verify report for a human reviewer."""
+    verdict = report.verdict.value.upper().replace("_", " ")
+    lines = [f"Verdict: {verdict}"]
+    lines += [f"  {reason}" for reason in report.reasons]
+
+    if report.score_before is not None and report.score_after is not None:
+        lines += ["", f"Score: {report.score_before:.1f} -> {report.score_after:.1f}"]
+
+    def section(title: str, items: list[FindingSummary]) -> None:
+        if not items:
+            return
+        lines.extend(["", f"{title} ({len(items)}):"])
+        for item in items:
+            lines.append(
+                f"  [{item.severity.value.upper():<8}] {item.file_path}:{item.start_line}"
+                f"  {item.tool} {item.rule_id}"
+            )
+
+    section("Resolved", report.resolved)
+    section("Remaining", report.remaining)
+    section("New", report.new)
+
+    if report.checks_run:
+        lines += ["", "Checks run on the patched copy:"]
+        lines += [f"  {check}" for check in report.checks_run]
+
+    if report.tests is not None and report.tests.output_tail and not report.tests.passed:
+        lines += ["", "Test output (last lines):"]
+        lines += [f"  {line}" for line in report.tests.output_tail.splitlines()[-15:]]
+
+    lines += ["", "Limitations:"]
+    lines += [f"  - {item}" for item in report.limitations]
+    return "\n".join(lines)
+
+
+def _run_verify(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    if args.timeout <= 0 or args.test_timeout <= 0:
+        parser.print_usage(sys.stderr)
+        print("silentsec: numeric options must be positive.", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    if not args.path.is_dir():
+        print(f"silentsec: not a directory: {args.path}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    try:
+        diff_text = read_patch_file(args.patch)
+    except FileNotFoundError:
+        print(f"silentsec: patch file not found: {args.patch}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+    except (OSError, UnicodeError) as exc:
+        print(f"silentsec: could not read patch file ({type(exc).__name__}).", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    test_command = (
+        shlex.split(args.test_command, posix=os.name != "nt") if args.test_command else None
+    )
+
+    report = verify_fix(
+        args.path,
+        diff_text,
+        target_fingerprints=args.targets or None,
+        run_tests=args.run_tests or test_command is not None,
+        test_command=test_command,
+        timeout_seconds=args.timeout,
+        test_timeout_seconds=args.test_timeout,
+        regression_severity=Severity.INFO if args.strict else DEFAULT_REGRESSION_SEVERITY,
+    )
+
+    print(format_verification(report))
+
+    if args.json_path is not None:
+        args.json_path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+        print(f"\nJSON report written to {args.json_path}")
+
+    if report.verdict == FixVerdict.VERIFIED_FIX:
+        return EXIT_OK
+    if report.verdict == FixVerdict.NOT_VERIFIED:
+        return EXIT_NOT_VERIFIED
+    return EXIT_FIX_NOT_CONFIRMED
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+
+    if args.command == "verify":
+        return _run_verify(args, parser)
 
     if args.timeout <= 0 or args.max_ai_findings <= 0 or args.top < 0:
         parser.print_usage(sys.stderr)
