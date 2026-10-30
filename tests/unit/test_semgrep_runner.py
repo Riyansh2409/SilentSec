@@ -176,3 +176,38 @@ def test_real_semgrep_scans_repository_stored_under_excluded_name(
     # The repository is scanned even though a parent folder is named "build",
     # while its own build/ folder is still excluded.
     assert [finding.file_path for finding in result.findings] == ["app.py"]
+
+
+OBFUSCATED_SOURCE = '''
+import importlib
+import os
+import subprocess
+
+
+def run(cmd):
+    __import__("os").system(cmd)
+    importlib.import_module("os").system(cmd)
+    getattr(os, "system")(cmd)
+    os.execvp(cmd, [cmd])
+    subprocess.getoutput(cmd)
+
+
+def safe():
+    __import__("json").dumps({})
+    getattr(os, "getcwd")()
+    os.execvp("ls", ["ls"])
+    subprocess.getoutput("date")
+'''
+
+
+@pytest.mark.skipif(shutil.which("semgrep") is None, reason="semgrep not installed")
+def test_real_semgrep_catches_obfuscated_command_execution(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv(SEMGREP_CONFIG_ENV, raising=False)
+    (tmp_path / "app.py").write_text(OBFUSCATED_SOURCE, encoding="utf-8")
+
+    result = run_semgrep(tmp_path, timeout_seconds=120)
+
+    assert result.status == ScannerStatus.SUCCESS, result.errors
+    lines = sorted({finding.start_line for finding in result.findings})
+    assert lines == [8, 9, 10, 11, 12]
+    assert {finding.cwe_id for finding in result.findings} == {"CWE-78"}

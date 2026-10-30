@@ -73,3 +73,17 @@ def test_ai_fix_that_adds_command_injection_is_a_regression(repo: Path):
     assert report.status == AIFixStatus.PROPOSED
     assert report.verification.verdict == FixVerdict.REGRESSION, report.verification.reasons
     assert report.verification.new
+
+
+def test_ai_fix_hiding_command_execution_behind_import_is_a_regression(repo: Path):
+    # Neither Bandit nor the original rules caught this form; the bundled
+    # dynamic-os-exec rule does.
+    model = ScriptedModel(
+        '    __import__("os").system("echo " + name)\n'
+        '    return conn.execute("SELECT * FROM users WHERE name = ?", (name,)).fetchall()'
+    )
+
+    report = ai_fix_and_verify(repo, providers=[model], timeout_seconds=240)
+
+    assert report.verification.verdict == FixVerdict.REGRESSION, report.verification.reasons
+    assert any("dynamic-os-exec" in item.rule_id for item in report.verification.new)
