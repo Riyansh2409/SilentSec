@@ -152,7 +152,7 @@ def _remediation_effort(finding: Finding) -> RemediationEffort:
         return "medium"
     if rule in {"ARCH-004", "SSEC-ARCH-004"}:
         return "high"
-    if rule in {"ARCH-003", "SSEC-ARCH-003"}:
+    if rule in {"ARCH-003", "SSEC-ARCH-003", "SSEC-ARCH-005"}:
         return "medium"
     if rule in {
         "ARCH-001", "ARCH-002", "SSEC-ARCH-001", "SSEC-ARCH-002"

@@ -96,10 +96,11 @@ The architecture analyzer detects the following patterns in Python code:
 - **SSEC-ARCH-002:** Potentially swallowed exceptions. This is a heuristic, not proof that an exception is unintentionally ignored.
 - **SSEC-ARCH-003:** High cyclomatic complexity in functions and methods. Low severity is reported above 10; medium severity above 20.
 - **SSEC-ARCH-004:** Circular imports, including supported relative imports.
+- **SSEC-ARCH-005:** Duplicated functions. Two functions match when their syntax trees are identical after ignoring local names, argument names, literal values, docstrings, type hints and decorators; attribute and keyword names still count. Functions under 5 statements or 6 lines are ignored. This finds copy-paste-and-rename clones, not near-duplicates whose structure differs.
 
 Analysis uses Python AST parsing and does not execute repository code. Oversized files and excluded directories are skipped. Syntax errors in individual files are reported without preventing analysis of other files.
 
-Duplicate-logic detection and coupling-hotspot analysis are planned capabilities, not implemented features.
+Coupling-hotspot analysis and near-duplicate (similar but not identical) detection are planned capabilities, not implemented features.
 
 ## Explainable Score
 
