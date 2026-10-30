@@ -1,4 +1,5 @@
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,18 @@ from .common import (
 )
 from .results import ScannerRunResult, ScannerStatus
 from .runner_utils import run_json_command
+
+# Bandit's hardcoded-password tests quote the suspected secret in their
+# message ("Possible hardcoded password: 'hunter2'"). The value is removed so
+# it never reaches reports, history storage, or AI providers.
+HARDCODED_SECRET_TESTS = frozenset({"B105", "B106", "B107"})
+_QUOTED_VALUE = re.compile(r"""(['"])(?:(?!\1).)*\1""")
+
+
+def _safe_message(rule_id: str, issue_text: str) -> str:
+    if rule_id.upper() in HARDCODED_SECRET_TESTS:
+        return _QUOTED_VALUE.sub(r"\1[REDACTED]\1", issue_text)
+    return issue_text
 
 EXCLUDED_DIRECTORIES = {
     ".git",
@@ -105,7 +118,7 @@ def parse_bandit_payload(
                 severity=normalize_severity(
                     item.get("issue_severity")
                 ),
-                message=str(item.get("issue_text") or rule_id),
+                message=_safe_message(rule_id, str(item.get("issue_text") or rule_id)),
                 cwe_id=extract_cwe(item.get("issue_cwe")),
                 confidence=normalize_confidence(
                     item.get("issue_confidence")
