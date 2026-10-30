@@ -1,0 +1,173 @@
+# SilentSec offline Semgrep rules for Python.
+#
+# These rules ship with SilentSec so scans work without downloading a
+# registry ruleset. They are a focused starter set, not a replacement for
+# the full Semgrep registry. Override with SILENTSEC_SEMGREP_CONFIG.
+#
+# Hardcoded secrets are intentionally not covered here; Gitleaks owns them.
+rules:
+  - id: silentsec.python.code-injection.eval-exec
+    languages: [python]
+    severity: ERROR
+    message: >-
+      eval/exec is called with a non-literal argument. If the value can be
+      influenced by a user, this allows arbitrary code execution.
+    metadata:
+      category: security
+      cwe: "CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code"
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: eval($X, ...)
+          - pattern: exec($X, ...)
+      - pattern-not: eval("...", ...)
+      - pattern-not: exec("...", ...)
+
+  - id: silentsec.python.command-injection.subprocess-shell-true
+    languages: [python]
+    severity: ERROR
+    message: >-
+      subprocess is called with shell=True. Shell metacharacters in the
+      command can lead to command injection; pass an argument list instead.
+    metadata:
+      category: security
+      cwe: "CWE-78: Improper Neutralization of Special Elements used in an OS Command"
+      confidence: HIGH
+    pattern-either:
+      - pattern: subprocess.$FUNC(..., shell=True, ...)
+      - pattern: subprocess.$FUNC(..., shell=1, ...)
+
+  - id: silentsec.python.command-injection.os-system
+    languages: [python]
+    severity: ERROR
+    message: >-
+      os.system/os.popen runs a shell with a non-literal command, which can
+      lead to command injection. Use subprocess with an argument list.
+    metadata:
+      category: security
+      cwe: "CWE-78: Improper Neutralization of Special Elements used in an OS Command"
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: os.system($CMD)
+          - pattern: os.popen($CMD, ...)
+      - pattern-not: os.system("...")
+      - pattern-not: os.popen("...", ...)
+
+  - id: silentsec.python.sql-injection.formatted-query
+    languages: [python]
+    severity: ERROR
+    message: >-
+      A SQL query is built with string formatting or concatenation and passed
+      to execute(). Use parameterized queries instead.
+    metadata:
+      category: security
+      cwe: "CWE-89: Improper Neutralization of Special Elements used in an SQL Command"
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: $CUR.$EXEC("..." % $ARGS, ...)
+          - pattern: $CUR.$EXEC("...".format(...), ...)
+          - pattern: $CUR.$EXEC(f"...", ...)
+          - pattern: $CUR.$EXEC("..." + $X, ...)
+          - patterns:
+              - pattern-inside: |
+                  $QUERY = "..." % $ARGS
+                  ...
+              - pattern: $CUR.$EXEC($QUERY, ...)
+          - patterns:
+              - pattern-inside: |
+                  $QUERY = f"..."
+                  ...
+              - pattern: $CUR.$EXEC($QUERY, ...)
+      # Restrict to DB-API style execute methods. This must sit inside
+      # "patterns"; at the top level Semgrep ignores it.
+      - metavariable-regex:
+          metavariable: $EXEC
+          regex: ^(execute|executemany|executescript)$
+
+  - id: silentsec.python.deserialization.pickle
+    languages: [python]
+    severity: WARNING
+    message: >-
+      pickle deserialization can execute arbitrary code. Never unpickle data
+      from an untrusted source.
+    metadata:
+      category: security
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+      confidence: MEDIUM
+    pattern-either:
+      - pattern: pickle.load(...)
+      - pattern: pickle.loads(...)
+      - pattern: cPickle.load(...)
+      - pattern: cPickle.loads(...)
+
+  - id: silentsec.python.deserialization.yaml-unsafe-load
+    languages: [python]
+    severity: WARNING
+    message: >-
+      yaml.load is used without a safe loader, which can construct arbitrary
+      Python objects. Use yaml.safe_load or Loader=yaml.SafeLoader.
+    metadata:
+      category: security
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+      confidence: HIGH
+    patterns:
+      - pattern: yaml.load(...)
+      - pattern-not: yaml.load(..., Loader=yaml.SafeLoader, ...)
+      - pattern-not: yaml.load(..., Loader=yaml.CSafeLoader, ...)
+      - pattern-not: yaml.load(..., Loader=SafeLoader, ...)
+
+  - id: silentsec.python.tls.requests-verify-disabled
+    languages: [python]
+    severity: WARNING
+    message: >-
+      TLS certificate verification is disabled (verify=False). This allows
+      man-in-the-middle attacks.
+    metadata:
+      category: security
+      cwe: "CWE-295: Improper Certificate Validation"
+      confidence: HIGH
+    pattern-either:
+      - pattern: requests.$METHOD(..., verify=False, ...)
+      - pattern: httpx.$METHOD(..., verify=False, ...)
+
+  - id: silentsec.python.crypto.weak-hash
+    languages: [python]
+    severity: WARNING
+    message: >-
+      MD5/SHA-1 are broken for security purposes. Use SHA-256 or stronger, or
+      pass usedforsecurity=False when the hash is not security-relevant.
+    metadata:
+      category: security
+      cwe: "CWE-327: Use of a Broken or Risky Cryptographic Algorithm"
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: hashlib.md5(...)
+          - pattern: hashlib.sha1(...)
+      - pattern-not: hashlib.$H(..., usedforsecurity=False, ...)
+
+  - id: silentsec.python.flask.debug-enabled
+    languages: [python]
+    severity: WARNING
+    message: >-
+      The Flask app is started with debug=True. The interactive debugger
+      allows code execution if it is reachable.
+    metadata:
+      category: security
+      cwe: "CWE-489: Active Debug Code"
+      confidence: MEDIUM
+    pattern: $APP.run(..., debug=True, ...)
+
+  - id: silentsec.python.tempfile.mktemp
+    languages: [python]
+    severity: WARNING
+    message: >-
+      tempfile.mktemp is race-prone and can be hijacked. Use
+      tempfile.mkstemp or NamedTemporaryFile.
+    metadata:
+      category: security
+      cwe: "CWE-377: Insecure Temporary File"
+      confidence: HIGH
+    pattern: tempfile.mktemp(...)
