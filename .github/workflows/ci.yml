@@ -77,5 +77,7 @@ jobs:
         run: |
           git status --porcelain > "$RUNNER_TEMP/before.txt"
           silentsec scan sample_repositories/semgrep_validation --json "$RUNNER_TEMP/report.json"
+          silentsec report sample_repositories/semgrep_validation --no-history --out "$RUNNER_TEMP/report.html"
+          grep -q "Security risk is" "$RUNNER_TEMP/report.html"
           git status --porcelain > "$RUNNER_TEMP/after.txt"
           diff "$RUNNER_TEMP/before.txt" "$RUNNER_TEMP/after.txt"
