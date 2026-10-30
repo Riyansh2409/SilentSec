@@ -14,6 +14,9 @@ dependencies = [
     "groq>=1.0.0,<2"
 ]
 
+[project.scripts]
+silentsec = "silentsec.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
