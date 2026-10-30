@@ -104,14 +104,30 @@ def test_repository_density_counts_nonblank_eligible_source_lines(tmp_path: Path
     (excluded / "ignored.py").write_text("x = 1\ny = 2\n", encoding="utf-8")
     report = score_findings([make_finding(fingerprint="density")], repo_root=str(tmp_path))
     assert report.analyzed_lines == 4
-    assert report.debt_density_per_kloc == 250.0
+    # Below MIN_LINES_FOR_DENSITY the rate would be misleading, so it is withheld.
+    assert report.debt_density_per_kloc is None
 
 
-def test_zero_line_repository_has_zero_density(tmp_path: Path) -> None:
+def test_density_is_reported_once_repository_reaches_threshold(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("x = 1\n" * 2000, encoding="utf-8")
+    findings = [make_finding(fingerprint=f"density-{index}") for index in range(5)]
+    report = score_findings(findings, repo_root=str(tmp_path))
+    assert report.analyzed_lines == 2000
+    assert report.debt_density_per_kloc == round(report.unique_open_findings_count / 2.0, 2)
+
+
+def test_density_threshold_boundary(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("x = 1\n" * 499, encoding="utf-8")
+    assert score_findings([], repo_root=str(tmp_path)).debt_density_per_kloc is None
+    (tmp_path / "app.py").write_text("x = 1\n" * 500, encoding="utf-8")
+    assert score_findings([], repo_root=str(tmp_path)).debt_density_per_kloc == 0.0
+
+
+def test_zero_line_repository_has_no_density(tmp_path: Path) -> None:
     (tmp_path / "blank.py").write_text("\n  \n", encoding="utf-8")
     report = score_findings([], repo_root=str(tmp_path))
     assert report.analyzed_lines == 0
-    assert report.debt_density_per_kloc == 0.0
+    assert report.debt_density_per_kloc is None
 
 
 def test_density_is_none_without_repository_root() -> None:
