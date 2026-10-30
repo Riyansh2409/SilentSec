@@ -86,3 +86,41 @@ def test_bandit_skips_invalid_result(tmp_path: Path):
 
     assert findings == []
     assert errors
+
+
+def test_bandit_hardcoded_password_message_does_not_contain_the_value(tmp_path):
+    from silentsec.scanners.bandit_runner import parse_bandit_payload
+
+    secret = "ghp_" + "1A2b3C4d5E6f7G8h9I0jK1lM2nO3pQ4rS5tU"
+    payload = {
+        "results": [
+            {
+                "test_id": test_id,
+                "filename": "settings.py",
+                "line_number": 1,
+                "issue_severity": "LOW",
+                "issue_confidence": "MEDIUM",
+                "issue_text": f"Possible hardcoded password: '{secret}'",
+            }
+            for test_id in ("B105", "B106", "B107")
+        ]
+        + [
+            {
+                "test_id": "B602",
+                "filename": "run.py",
+                "line_number": 3,
+                "issue_severity": "HIGH",
+                "issue_confidence": "HIGH",
+                "issue_text": "subprocess call with shell=True identified, security issue.",
+            }
+        ],
+        "errors": [],
+    }
+
+    findings, errors = parse_bandit_payload(payload, tmp_path)
+
+    assert errors == []
+    for finding in findings[:3]:
+        assert secret not in finding.message
+        assert finding.message == "Possible hardcoded password: '[REDACTED]'"
+    assert findings[3].message == "subprocess call with shell=True identified, security issue."

@@ -17,6 +17,7 @@ that accumulate hidden debt in AI-assisted codebases.
 - Architectural debt analysis using Python AST parsing.
 - Fix + Verify: check a proposed patch in an isolated copy and report what it fixed and broke.
 - AI fix proposals: an AI provider suggests a fix, which is then verified the same way.
+- Time Machine: how security debt changed across recent commits, and which commit introduced or fixed each finding.
 
 ## Installation
 
@@ -220,12 +221,47 @@ silentsec fix path\to\repository --finding FINGERPRINT --out fix.diff
 
 A verified AI fix is evidence, not proof, and always needs human review.
 
+## Time Machine
+
+`silentsec history` scans the last commits on the current branch and shows how
+debt changed, commit by commit:
+
+```powershell
+silentsec history path\to\repository                  # last 10 commits
+silentsec history path\to\repository --commits 25 --json timeline.json
+```
+
+```text
+Commit    Date         Score  Change Issues   New Fixed  Subject
+d7dbd03e  2026-10-30     0.0              0     -     -  Add user lookup
+13713b02  2026-10-30    14.2   +14.2      1     2     0  AI refactor: simplify query
+d17bcc4e  2026-10-30    20.6    +6.4      2     3     0  Add config loader
+5e6e502b  2026-10-30     6.4   -14.2      1     0     2  Fix SQL injection
+df4edacf  2026-10-30    21.9   +15.5      3     2     0  Add settings
+
+Biggest increase: df4edacf "Add settings" (+15.5)
+  + [HIGH    ] settings.py:1  gitleaks github-pat
+```
+
+- Each commit's files are exported with `git archive` into a temporary folder
+  and scanned. Your working tree and `.git` folder are never modified, and
+  uncommitted changes are not part of the history.
+- Consecutive scans are compared, so "New" and "Fixed" are attributed to the
+  commit that changed them. The oldest commit in the window is the baseline.
+  When a scan is incomplete (a scanner failed), changes next to it show `?`.
+- Scores here are uncapped, so changes stay visible above 100.
+- Results are stored in SQLite under `~/.cache/silentsec/history/` (or
+  `--db`), keyed by commit and by the SilentSec version and rules used, so a
+  second run only scans new commits. `--no-cache` rescans everything.
+  Incomplete scans are not stored.
+- Commits are followed along the first parent, so a merged branch counts as
+  one step. In a shallow clone, older commits are missing; the output says so.
+
 ## Planned Capabilities
 
 - Broader multi-language architectural analysis.
 - MCP tools for controlled analysis operations.
 - LangSmith tracing and evaluation.
-- Security-debt history across Git commits.
 - Docker packaging.
 
 ## Continuous Integration

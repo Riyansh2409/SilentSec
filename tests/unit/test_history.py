@@ -1,0 +1,248 @@
+"""Security Debt Time Machine."""
+
+import hashlib
+import os
+import shutil
+import subprocess
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from silentsec import cli
+from silentsec.history import HistoryError, HistoryStore, build_timeline
+from silentsec.history import store as store_module
+from silentsec.history.store import analysis_version, default_database_path
+from silentsec.scanners.results import ScannerRunResult, ScannerStatus
+from silentsec.scanners.scanner_service import scan_repository
+
+pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+
+CLEAN = "def load(path):\n    with open(path) as handle:\n        return handle.read()\n"
+SWALLOWED = (
+    "def load(path):\n    try:\n        return open(path).read()\n    except Exception:\n        pass\n"
+)
+
+
+def git(repo: Path, *args: str) -> str:
+    env = {**os.environ, "GIT_AUTHOR_DATE": "2026-10-01T10:00:00", "GIT_COMMITTER_DATE": "2026-10-01T10:00:00"}
+    return subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=dev", "-c", "user.email=dev@example.com", *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    ).stdout
+
+
+def commit(repo: Path, files: dict[str, str], message: str) -> None:
+    for name, text in files.items():
+        (repo / name).write_text(text, encoding="utf-8")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", message)
+
+
+@pytest.fixture
+def repo(tmp_path: Path) -> Path:
+    root = tmp_path / "repo"
+    root.mkdir()
+    git(root, "init", "-q", "-b", "main")
+    commit(root, {"app.py": CLEAN}, "Add loader")
+    commit(root, {"app.py": SWALLOWED}, "Refactor loader")
+    commit(root, {"app.py": CLEAN}, "Handle errors properly")
+    return root
+
+
+def skipped(name: str):
+    return lambda *args, **kwargs: ScannerRunResult(
+        scanner=name, status=ScannerStatus.SKIPPED, duration_seconds=0
+    )
+
+
+@pytest.fixture
+def architecture_only():
+    """Use the real architecture analyzer; skip external scanners."""
+    with (
+        patch("silentsec.scanners.scanner_service.run_semgrep", skipped("semgrep")),
+        patch("silentsec.scanners.scanner_service.run_bandit", skipped("bandit")),
+        patch("silentsec.scanners.scanner_service.run_gitleaks", skipped("gitleaks")),
+    ):
+        yield
+
+
+def tree_digest(root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        digest.update(path.relative_to(root).as_posix().encode())
+        if path.is_file():
+            digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def test_attributes_introduced_and_fixed_findings(repo: Path, tmp_path: Path, architecture_only):
+    report = build_timeline(repo, database=tmp_path / "h.db")
+
+    assert [point.subject for point in report.points] == [
+        "Add loader",
+        "Refactor loader",
+        "Handle errors properly",
+    ]
+    first, second, third = report.points
+    assert first.attribution == "baseline"
+    assert {change.rule_id for change in second.introduced} == {"SSEC-ARCH-001", "SSEC-ARCH-002"}
+    assert second.fixed == []
+    assert {change.rule_id for change in third.fixed} == {"SSEC-ARCH-001", "SSEC-ARCH-002"}
+    assert third.introduced == []
+    assert second.raw_score > first.raw_score == third.raw_score == 0
+    assert report.biggest_increase.subject == "Refactor loader"
+    assert report.branch == "main"
+
+
+def test_repository_and_git_directory_are_untouched(repo: Path, tmp_path: Path, architecture_only):
+    (repo / "uncommitted.py").write_text("x = 1\n", encoding="utf-8")
+    before = tree_digest(repo)
+
+    report = build_timeline(repo, database=tmp_path / "h.db")
+
+    assert tree_digest(repo) == before
+    # Uncommitted files are never part of the history.
+    assert all(point.unique_issues == 0 or point.subject == "Refactor loader" for point in report.points)
+
+
+def test_second_run_reuses_stored_scans(repo: Path, tmp_path: Path):
+    calls: list[Path] = []
+
+    def counting_scan(root, **kwargs):
+        calls.append(Path(root))
+        return scan_repository(root, **kwargs)
+
+    with (
+        patch("silentsec.scanners.scanner_service.run_semgrep", skipped("semgrep")),
+        patch("silentsec.scanners.scanner_service.run_bandit", skipped("bandit")),
+        patch("silentsec.scanners.scanner_service.run_gitleaks", skipped("gitleaks")),
+    ):
+        first = build_timeline(repo, database=tmp_path / "h.db", scan=counting_scan)
+        second = build_timeline(repo, database=tmp_path / "h.db", scan=counting_scan)
+        third = build_timeline(repo, database=tmp_path / "h.db", scan=counting_scan, use_cache=False)
+
+    assert len(calls) == 6  # 3 for the first run, 0 for the second, 3 for --no-cache
+    assert not any(point.from_cache for point in first.points)
+    assert all(point.from_cache for point in second.points)
+    assert [p.raw_score for p in first.points] == [p.raw_score for p in second.points]
+    assert not any(point.from_cache for point in third.points)
+    # Every scan ran on a temporary export, never on the repository itself.
+    assert all(not root.is_relative_to(repo) for root in calls)
+
+
+def test_incomplete_scans_are_marked_unknown_and_not_stored(repo: Path, tmp_path: Path):
+    def failing_bandit(*args, **kwargs):
+        return ScannerRunResult(scanner="bandit", status=ScannerStatus.FAILED, duration_seconds=0)
+
+    with (
+        patch("silentsec.scanners.scanner_service.run_semgrep", skipped("semgrep")),
+        patch("silentsec.scanners.scanner_service.run_bandit", failing_bandit),
+        patch("silentsec.scanners.scanner_service.run_gitleaks", skipped("gitleaks")),
+    ):
+        report = build_timeline(repo, database=tmp_path / "h.db")
+
+    assert all(not point.complete for point in report.points)
+    assert [point.attribution for point in report.points] == ["baseline", "unknown", "unknown"]
+    assert all(point.introduced == [] for point in report.points)
+    assert HistoryStore(tmp_path / "h.db").get(report.points[0].commit_sha, analysis_version()) is None
+    assert any("incomplete" in item for item in report.limitations)
+
+
+def test_commit_window_is_limited(repo: Path, tmp_path: Path, architecture_only):
+    report = build_timeline(repo, commits=2, database=tmp_path / "h.db")
+
+    assert [point.subject for point in report.points] == ["Refactor loader", "Handle errors properly"]
+    assert report.points[0].attribution == "baseline"
+
+    with pytest.raises(ValueError):
+        build_timeline(repo, commits=0, database=tmp_path / "h.db")
+    with pytest.raises(ValueError):
+        build_timeline(repo, commits=51, database=tmp_path / "h.db")
+
+
+def test_short_history_is_reported(repo: Path, tmp_path: Path, architecture_only):
+    report = build_timeline(repo, commits=10, database=tmp_path / "h.db")
+
+    assert any("Only 3 commit(s)" in item for item in report.limitations)
+
+
+def test_shallow_clone_is_reported(repo: Path, tmp_path: Path, architecture_only):
+    shallow = tmp_path / "shallow"
+    subprocess.run(
+        ["git", "clone", "-q", "--depth", "1", repo.as_uri(), str(shallow)],
+        check=True,
+        capture_output=True,
+    )
+
+    report = build_timeline(shallow, database=tmp_path / "s.db")
+
+    assert report.shallow_clone
+    assert any("shallow clone" in item for item in report.limitations)
+
+
+def test_not_a_git_repository(tmp_path: Path, monkeypatch):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+
+    with pytest.raises(HistoryError, match="Not a Git repository"):
+        build_timeline(plain, database=tmp_path / "h.db")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need privileges on Windows")
+def test_symlink_leaving_repository_is_skipped(repo: Path, tmp_path: Path, architecture_only):
+    (repo / "escape").symlink_to("../../../../etc")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "Add link")
+
+    report = build_timeline(repo, commits=1, database=tmp_path / "h.db")
+
+    assert report.points[0].complete
+    assert any("unsafe archive" in item for item in report.limitations)
+
+
+def test_default_database_is_outside_repository(repo: Path):
+    path = default_database_path(repo)
+
+    assert not path.is_relative_to(repo)
+    assert path.suffix == ".db"
+
+
+def test_analysis_version_changes_with_rules(tmp_path: Path, monkeypatch):
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "r.yml").write_text("rules: []\n", encoding="utf-8")
+    monkeypatch.setattr(store_module, "_RULES_DIR", rules)
+    before = analysis_version()
+
+    (rules / "r.yml").write_text("rules: [changed]\n", encoding="utf-8")
+
+    assert analysis_version() != before
+
+
+# --- CLI --------------------------------------------------------------------
+
+
+def test_cli_prints_timeline_table(repo: Path, tmp_path: Path, architecture_only, capsys):
+    code = cli.main(["history", str(repo), "--db", str(tmp_path / "h.db")])
+
+    output = capsys.readouterr().out
+    assert code == cli.EXIT_OK
+    assert "SilentSec Time Machine" in output
+    assert "Refactor loader" in output
+    assert 'Biggest increase:' in output
+    assert "SSEC-ARCH-002" in output
+
+
+def test_cli_rejects_bad_options_and_non_repositories(tmp_path: Path, monkeypatch, capsys):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+
+    assert cli.main(["history", str(plain), "--commits", "0"]) == cli.EXIT_USAGE_ERROR
+    assert cli.main(["history", str(plain), "--db", str(tmp_path / "h.db")]) == cli.EXIT_USAGE_ERROR
+    assert "Not a Git repository" in capsys.readouterr().err
