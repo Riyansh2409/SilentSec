@@ -64,6 +64,11 @@ silentsec scan path\to\repository --ai-triage --max-ai-findings 10
 The command prints scanner statuses, the score with both risk levels, top
 findings, and recurring patterns. `--json` writes the full report.
 
+The score is capped at 100. When the uncapped total is higher, the output also
+shows it (for example `Score: 100.0 / 100  (uncapped 111.3 ...)`), and
+`silentsec verify` and `silentsec fix` show the uncapped before/after change,
+so an improvement is not hidden by the cap. The scoring formula is unchanged.
+
 Exit codes: `0` when every scanner succeeded, `2` when the scan is incomplete
 (for example, a scanner is not installed), `64` for usage errors. An incomplete
 scan still returns findings and a score, but verification will not confirm any
@@ -79,8 +84,11 @@ finding as resolved.
 | Architecture analyzer | Structural debt | See below. |
 
 Scanners never execute repository code and never write into the scanned
-repository. The bundled Semgrep rules are a focused starter set for Python, not
-a replacement for the full Semgrep registry.
+repository. The bundled Semgrep rules are a focused starter set of 13 Python
+rules, not a replacement for the full Semgrep registry. They include command
+execution hidden behind `__import__`, `importlib.import_module` or `getattr`
+(for example `__import__("os").system(cmd)`), which Bandit does not flag; this
+matters when verifying AI-proposed fixes.
 
 When different tools report the same issue, SilentSec merges them: matching CWE
 on overlapping lines across tools, and equivalent exception-handler rules

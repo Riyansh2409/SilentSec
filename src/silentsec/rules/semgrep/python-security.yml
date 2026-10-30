@@ -171,3 +171,65 @@ rules:
       cwe: "CWE-377: Insecure Temporary File"
       confidence: HIGH
     pattern: tempfile.mktemp(...)
+
+  - id: silentsec.python.command-injection.dynamic-os-exec
+    languages: [python]
+    severity: ERROR
+    message: >-
+      A shell or process function is reached through __import__,
+      importlib.import_module or getattr. This hides command execution from
+      simple checks; with a non-literal command it can lead to command injection.
+    metadata:
+      category: security
+      cwe: "CWE-78: Improper Neutralization of Special Elements used in an OS Command"
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: __import__("os").$FUNC(...)
+          - pattern: importlib.import_module("os").$FUNC(...)
+          - pattern: getattr(os, "$FUNC")(...)
+          - pattern: getattr(__import__("os"), "$FUNC")(...)
+          - pattern: __import__("subprocess").$FUNC(...)
+          - pattern: importlib.import_module("subprocess").$FUNC(...)
+          - pattern: getattr(subprocess, "$FUNC")(...)
+      - metavariable-regex:
+          metavariable: $FUNC
+          regex: ^(system|popen|exec\w*|spawn\w*|call|run|Popen|check_call|check_output|getoutput|getstatusoutput)$
+
+  - id: silentsec.python.command-injection.exec-spawn
+    languages: [python]
+    severity: ERROR
+    message: >-
+      os.exec*/os.spawn* start a process with a non-literal command. If the
+      value can be influenced by a user this can lead to command injection;
+      validate it and prefer subprocess.run with an argument list.
+    metadata:
+      category: security
+      cwe: "CWE-78: Improper Neutralization of Special Elements used in an OS Command"
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: os.$FUNC($CMD, ...)
+          - pattern: os.$FUNC($MODE, $CMD, ...)
+      - metavariable-regex:
+          metavariable: $FUNC
+          regex: ^(exec(l|le|lp|lpe|v|ve|vp|vpe)|spawn(l|le|lp|lpe|v|ve|vp|vpe))$
+      - pattern-not: os.$FUNC("...", ...)
+      - pattern-not: os.$FUNC($MODE, "...", ...)
+
+  - id: silentsec.python.command-injection.subprocess-getoutput
+    languages: [python]
+    severity: ERROR
+    message: >-
+      subprocess.getoutput/getstatusoutput always run their argument through a
+      shell. With a non-literal command this can lead to command injection.
+    metadata:
+      category: security
+      cwe: "CWE-78: Improper Neutralization of Special Elements used in an OS Command"
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.getoutput($CMD)
+          - pattern: subprocess.getstatusoutput($CMD)
+      - pattern-not: subprocess.getoutput("...")
+      - pattern-not: subprocess.getstatusoutput("...")

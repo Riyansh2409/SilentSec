@@ -113,6 +113,10 @@ class FixVerificationReport(BaseModel):
     new: list[FindingSummary] = Field(default_factory=list)
     score_before: float | None = None
     score_after: float | None = None
+    # Uncapped scores. The repository score is capped at 100, so when the
+    # raw score is above 100 the capped values can hide an improvement.
+    raw_score_before: float | None = None
+    raw_score_after: float | None = None
     scanners_before: dict[str, str] = Field(default_factory=dict)
     scanners_after: dict[str, str] = Field(default_factory=dict)
     checks_run: list[str] = Field(default_factory=list)
@@ -161,6 +165,10 @@ def _incomplete_scanners(result: RepositoryScanResult) -> list[str]:
         for scanner in result.scanners
         if scanner.status not in {ScannerStatus.SUCCESS, ScannerStatus.SKIPPED}
     ]
+
+
+def _raw_score(result: RepositoryScanResult) -> float | None:
+    return result.security_debt.raw_score if result.security_debt is not None else None
 
 
 def _score(result: RepositoryScanResult) -> float | None:
@@ -294,6 +302,7 @@ def verify_fix(
                     patch_files=validation.touched_files,
                     limitations=extra_limitations,
                     score_before=_score(baseline),
+                    raw_score_before=_raw_score(baseline),
                     scanners_before=_scanner_statuses(baseline),
                 )
             targets = [by_fingerprint[fingerprint] for fingerprint in wanted]
@@ -307,6 +316,7 @@ def verify_fix(
                 limitations=extra_limitations,
                 targets=[_summary(finding) for finding in targets],
                 score_before=_score(baseline),
+                raw_score_before=_raw_score(baseline),
                 scanners_before=_scanner_statuses(baseline),
             )
 
@@ -399,6 +409,8 @@ def verify_fix(
         new=new,
         score_before=_score(baseline),
         score_after=_score(after),
+        raw_score_before=_raw_score(baseline),
+        raw_score_after=_raw_score(after),
         scanners_before=_scanner_statuses(baseline),
         scanners_after=_scanner_statuses(after),
         checks_run=checks_run,
