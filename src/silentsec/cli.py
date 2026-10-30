@@ -48,6 +48,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Maximum findings sent to AI triage (default: 20).",
     )
     scan.add_argument(
+        "--no-triage-cache",
+        action="store_true",
+        help="Do not reuse or store cached AI triage results.",
+    )
+    scan.add_argument(
         "--timeout",
         type=int,
         default=180,
@@ -161,7 +166,14 @@ def format_summary(result: RepositoryScanResult, *, top: int = 10) -> str:
                 )
 
     if result.triage_attempted:
-        lines += ["", f"AI triage: {len(result.triage_results)} findings triaged"]
+        lines += [
+            "",
+            (
+                f"AI triage: {len(result.triage_results)} findings triaged "
+                f"({result.triage_cache_hits} from cache, "
+                f"{result.triage_provider_calls} provider calls)"
+            ),
+        ]
         for error in result.triage_errors[:3]:
             lines.append(f"  ! {error}")
 
@@ -286,6 +298,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         timeout_seconds=args.timeout,
         enable_ai_triage=args.ai_triage,
         max_ai_triage_findings=args.max_ai_findings,
+        use_triage_cache=not args.no_triage_cache,
     )
 
     print(format_summary(result, top=args.top))

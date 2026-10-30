@@ -16,6 +16,7 @@ from silentsec.triage import (
     TriageResult,
     build_default_router,
 )
+from silentsec.triage.router import TriageBudgetExceededError
 from silentsec.verification import (
     VerificationHistory,
     VerificationReport,
@@ -69,6 +70,8 @@ class RepositoryScanResult(BaseModel):
     triage_attempted: bool = False
     triage_complete: bool = False
     triage_errors: list[str] = Field(default_factory=list)
+    triage_cache_hits: int = Field(default=0, ge=0)
+    triage_provider_calls: int = Field(default=0, ge=0)
     verification_report: VerificationReport | None = None
     verification_attempted: bool = False
 
@@ -140,6 +143,7 @@ def scan_repository(
     *,
     enable_ai_triage: bool = False,
     max_ai_triage_findings: int = 20,
+    use_triage_cache: bool = True,
     verification_baseline: Iterable[Finding] | None = None,
     verification_history: VerificationHistory | None = None,
 ) -> RepositoryScanResult:
@@ -222,12 +226,19 @@ def scan_repository(
 
     triage_results: list[TriageResult] = []
     triage_errors: list[str] = []
+    triage_cache_hits = 0
+    triage_provider_calls = 0
     triage_attempted = enable_ai_triage
     triage_complete = False
 
     if enable_ai_triage:
         try:
-            router = build_default_router()
+            # Budget: enough for every selected finding to use a retry and a
+            # fallback, but bounded so one scan cannot drain API quota.
+            router_options: dict = {"max_provider_calls": max_ai_triage_findings * 3}
+            if not use_triage_cache:
+                router_options["cache"] = None
+            router = build_default_router(**router_options)
         except Exception as exc:  # noqa: BLE001
             router = None
             triage_errors.append(f"Could not initialize AI triage ({type(exc).__name__}).")
@@ -277,6 +288,12 @@ def scan_repository(
                     )
                     triage_results.append(result)
 
+                except TriageBudgetExceededError:
+                    triage_errors.append(
+                        "AI triage call budget reached; remaining findings were not triaged."
+                    )
+                    break
+
                 except Exception as exc:  # noqa: BLE001
                     # One failed finding must not stop the remaining triage work.
                     triage_errors.append(
@@ -284,6 +301,10 @@ def scan_repository(
                     )
 
             triage_complete = len(triage_results) == len(findings) and not triage_errors
+
+            cache = getattr(router, "cache", None)
+            triage_cache_hits = getattr(cache, "hits", 0) if cache is not None else 0
+            triage_provider_calls = getattr(router, "provider_calls", 0)
 
     return RepositoryScanResult(
         repo_path=str(root),
@@ -299,6 +320,10 @@ def scan_repository(
         triage_attempted=triage_attempted,
         triage_complete=triage_complete,
         triage_errors=triage_errors,
+        triage_cache_hits=triage_cache_hits if isinstance(triage_cache_hits, int) else 0,
+        triage_provider_calls=(
+            triage_provider_calls if isinstance(triage_provider_calls, int) else 0
+        ),
         verification_report=verification_report,
         verification_attempted=verification_attempted,
     )

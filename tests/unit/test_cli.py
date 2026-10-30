@@ -203,3 +203,14 @@ def test_strict_flag_sets_lowest_regression_threshold(tmp_path: Path):
 
         cli.main(["verify", str(tmp_path), "--patch", str(patch_file), "--strict"])
         assert verify.call_args.kwargs["regression_severity"] == Severity.INFO
+
+
+def test_scan_triage_cache_flag(tmp_path: Path):
+    with patch.object(
+        cli, "scan_repository", return_value=make_result(tmp_path, complete=True)
+    ) as scan:
+        cli.main(["scan", str(tmp_path)])
+        assert scan.call_args.kwargs["use_triage_cache"] is True
+
+        cli.main(["scan", str(tmp_path), "--no-triage-cache"])
+        assert scan.call_args.kwargs["use_triage_cache"] is False
