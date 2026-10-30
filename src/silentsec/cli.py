@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from silentsec.remediation import FindingSummary, FixVerdict, FixVerificationReport, verify_fix
+from silentsec.remediation.ai_fix import AIFixReport, AIFixStatus, ai_fix_and_verify
 from silentsec.remediation.verify import DEFAULT_REGRESSION_SEVERITY
 from silentsec.scanners.results import ScannerStatus
 from silentsec.scanners.scanner_service import RepositoryScanResult, scan_repository
@@ -107,6 +108,34 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=300,
         help="Test command timeout in seconds (default: 300).",
+    )
+
+    fix = subcommands.add_parser(
+        "fix",
+        help="Ask an AI provider for a fix and verify it in an isolated copy.",
+    )
+    fix.add_argument("path", type=Path, help="Repository folder (never modified).")
+    fix.add_argument(
+        "--finding",
+        metavar="FINGERPRINT",
+        help="Finding to fix (from 'silentsec scan --json'). Default: top security finding.",
+    )
+    fix.add_argument(
+        "--out",
+        type=Path,
+        help="Save the proposed patch here for review (apply it yourself with git apply).",
+    )
+    fix.add_argument(
+        "--run-tests",
+        action="store_true",
+        help="Also run the repository's tests on the patched copy. Executes repository code.",
+    )
+    fix.add_argument("--json", dest="json_path", type=Path, help="Write the report as JSON.")
+    fix.add_argument(
+        "--timeout",
+        type=int,
+        default=180,
+        help="Per-scanner timeout in seconds (default: 180).",
     )
     return parser
 
@@ -265,12 +294,80 @@ def _run_verify(args: argparse.Namespace, parser: argparse.ArgumentParser) -> in
     return EXIT_FIX_NOT_CONFIRMED
 
 
+def format_ai_fix(report: AIFixReport) -> str:
+    """Render an AI fix report: the finding, the proposal, and its verification."""
+    lines: list[str] = []
+    if report.finding_location:
+        lines.append(f"Finding: {report.finding_rule} at {report.finding_location}")
+        lines.append(f"Fingerprint: {report.finding_fingerprint}")
+
+    if report.status != AIFixStatus.PROPOSED or report.proposal is None:
+        status = report.status.value.upper().replace("_", " ")
+        lines += ["", f"No verified AI fix: {status}"]
+        lines += [f"  {error}" for error in report.errors]
+        return "\n".join(lines)
+
+    proposal = report.proposal
+    lines += [
+        "",
+        f"AI proposal from {proposal.provider} (requires human review):",
+        f"  {proposal.explanation}",
+        "",
+        proposal.diff_text.rstrip("\n"),
+    ]
+    if report.errors:
+        lines += ["", "Providers tried before this one:"]
+        lines += [f"  {error}" for error in report.errors]
+    if report.verification is not None:
+        lines += ["", format_verification(report.verification)]
+    lines += [f"  - {item}" for item in report.limitations]
+    return "\n".join(lines)
+
+
+def _run_fix(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    if args.timeout <= 0:
+        parser.print_usage(sys.stderr)
+        print("silentsec: numeric options must be positive.", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    if not args.path.is_dir():
+        print(f"silentsec: not a directory: {args.path}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    report = ai_fix_and_verify(
+        args.path,
+        fingerprint=args.finding,
+        run_tests=args.run_tests,
+        timeout_seconds=args.timeout,
+    )
+
+    print(format_ai_fix(report))
+
+    if args.out is not None and report.proposal is not None:
+        args.out.write_text(report.proposal.diff_text, encoding="utf-8")
+        print(f"\nProposed patch written to {args.out} (not applied).")
+
+    if args.json_path is not None:
+        args.json_path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+        print(f"JSON report written to {args.json_path}")
+
+    if report.status != AIFixStatus.PROPOSED or report.verification is None:
+        return EXIT_NOT_VERIFIED
+    if report.verification.verdict == FixVerdict.VERIFIED_FIX:
+        return EXIT_OK
+    if report.verification.verdict == FixVerdict.NOT_VERIFIED:
+        return EXIT_NOT_VERIFIED
+    return EXIT_FIX_NOT_CONFIRMED
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
     if args.command == "verify":
         return _run_verify(args, parser)
+    if args.command == "fix":
+        return _run_fix(args, parser)
 
     if args.timeout <= 0 or args.max_ai_findings <= 0 or args.top < 0:
         parser.print_usage(sys.stderr)
