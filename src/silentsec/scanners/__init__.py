@@ -1,4 +1,4 @@
-﻿from .bandit_runner import run_bandit
+from .bandit_runner import run_bandit
 from .gitleaks_runner import run_gitleaks
 from .results import ScannerRunResult, ScannerStatus
 from .semgrep_runner import run_semgrep

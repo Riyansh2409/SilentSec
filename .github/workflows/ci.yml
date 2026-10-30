@@ -35,3 +35,47 @@ jobs:
 
       - name: Run tests
         run: pytest -q
+
+  real-scanners:
+    name: Real scanner smoke test
+    runs-on: ubuntu-24.04
+    env:
+      GITLEAKS_VERSION: "8.21.2"
+      GITLEAKS_SHA256: "5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install project with scanners
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,scanners]"
+
+      - name: Install Gitleaks (pinned and checksum-verified)
+        run: |
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL -o "$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
+          echo "${GITLEAKS_SHA256}  ${archive}" | sha256sum --check
+          tar -xzf "$archive" gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      # The real-scanner tests are skipped when a binary is missing; here all
+      # scanners are installed, so they run against the actual tools.
+      - name: Run tests with real scanners
+        run: pytest -q
+
+      - name: End-to-end scan must be complete and leave the repo unchanged
+        run: |
+          git status --porcelain > "$RUNNER_TEMP/before.txt"
+          silentsec scan sample_repositories/semgrep_validation --json "$RUNNER_TEMP/report.json"
+          git status --porcelain > "$RUNNER_TEMP/after.txt"
+          diff "$RUNNER_TEMP/before.txt" "$RUNNER_TEMP/after.txt"

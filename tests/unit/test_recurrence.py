@@ -1,4 +1,4 @@
-﻿from silentsec.schemas.finding import Finding, Severity
+from silentsec.schemas.finding import Finding, Severity
 from silentsec.scoring.correlation import CorrelationGroup, correlate_findings
 from silentsec.scoring.recurrence import detect_recurring_patterns
 

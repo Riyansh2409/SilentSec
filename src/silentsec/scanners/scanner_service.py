@@ -32,8 +32,10 @@ def _build_verification_report(
     baseline: list[Finding] | None,
     current: Iterable[Finding],
     history: VerificationHistory | None,
+    *,
+    scan_complete: bool = False,
 ) -> VerificationReport | None:
-    """Compare findings without claiming resolution from an incomplete scan."""
+    """Compare findings; resolution is only claimed when scan_complete is True."""
     if baseline is None:
         return None
 
@@ -41,13 +43,13 @@ def _build_verification_report(
         return history.compare(
             baseline,
             current,
-            scan_complete=False,
+            scan_complete=scan_complete,
         )
 
     return compare_findings(
         baseline,
         current,
-        scan_complete=False,
+        scan_complete=scan_complete,
     )
 
 
@@ -210,24 +212,13 @@ def scan_repository(
 
     security_debt_complete = all(result.status == ScannerStatus.SUCCESS for result in results)
 
-    verification_report = None
-    verification_attempted = verification_baseline is not None
-
     verification_attempted = baseline_findings is not None
-
-    if baseline_findings is not None:
-        if verification_history is not None:
-            verification_report = verification_history.compare(
-                baseline_findings,
-                findings,
-                scan_complete=security_debt_complete,
-            )
-        else:
-            verification_report = compare_findings(
-                baseline_findings,
-                findings,
-                scan_complete=security_debt_complete,
-            )
+    verification_report = _build_verification_report(
+        baseline_findings,
+        findings,
+        verification_history,
+        scan_complete=security_debt_complete,
+    )
 
     triage_results: list[TriageResult] = []
     triage_errors: list[str] = []

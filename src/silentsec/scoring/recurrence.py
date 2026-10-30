@@ -1,4 +1,4 @@
-﻿"""Deterministic recurring-pattern detection for correlated findings."""
+"""Deterministic recurring-pattern detection for correlated findings."""
 
 from collections import defaultdict
 from collections.abc import Iterable

@@ -1,5 +1,8 @@
 import json
+import os
 import subprocess  # nosec B404
+import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -8,6 +11,9 @@ from silentsec.schemas import Finding, FindingCategory, Severity
 
 from .common import create_fingerprint, normalize_file_path
 from .results import ScannerRunResult, ScannerStatus
+
+# Shipped inside the package so it is available for editable and regular installs.
+GITLEAKS_CONFIG_PATH = Path(__file__).resolve().parent.parent / "rules" / "gitleaks.toml"
 
 
 def parse_gitleaks_payload(
@@ -108,11 +114,7 @@ def run_gitleaks(
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be positive")
 
-    config_path = (
-        Path(__file__).resolve().parents[3]
-        / "config"
-        / "gitleaks.toml"
-    )
+    config_path = GITLEAKS_CONFIG_PATH
 
     if not config_path.is_file():
         return ScannerRunResult(
@@ -122,19 +124,55 @@ def run_gitleaks(
             errors=["SilentSec Gitleaks configuration file is missing."],
         )
 
+    # Write the report to a private temporary file outside the scanned
+    # repository. Some Gitleaks versions treat "--report-path=-" as a literal
+    # file name, which would create a file inside the repository and leave
+    # stdout empty.
+    report_fd, report_name = tempfile.mkstemp(
+        prefix="silentsec-gitleaks-",
+        suffix=".json",
+    )
+    os.close(report_fd)
+    report_path = Path(report_name)
+
+    try:
+        return _run_gitleaks_command(
+            root=root,
+            config_path=config_path,
+            report_path=report_path,
+            timeout_seconds=timeout_seconds,
+            elapsed=elapsed,
+        )
+    finally:
+        report_path.unlink(missing_ok=True)
+
+
+def _run_gitleaks_command(
+    *,
+    root: Path,
+    config_path: Path,
+    report_path: Path,
+    timeout_seconds: int,
+    elapsed: Callable[[], float],
+) -> ScannerRunResult:
+    """Execute Gitleaks and parse the report it wrote to report_path."""
+
     command = [
         "gitleaks",
         "dir",
         "--config",
         str(config_path),
         "--report-format=json",
-        "--report-path=-",
+        f"--report-path={report_path}",
         "--exit-code=0",
         "--redact=100",
         "--no-banner",
         "--no-color",
         "--log-level=fatal",
-        str(root),
+        # Scan "." with cwd=root so allowlist path patterns only match inside
+        # the repository. With an absolute target, a repository stored under
+        # a folder named e.g. "build" would have every file allowlisted.
+        ".",
     ]
 
     try:
@@ -190,7 +228,13 @@ def run_gitleaks(
         )
 
     try:
-        payload = json.loads(completed.stdout)
+        report_text = report_path.read_text(encoding="utf-8")
+    except OSError:
+        report_text = ""
+
+    try:
+        # An empty report file means Gitleaks found nothing to report.
+        payload = json.loads(report_text) if report_text.strip() else []
     except (json.JSONDecodeError, TypeError):
         return ScannerRunResult(
             scanner="gitleaks",

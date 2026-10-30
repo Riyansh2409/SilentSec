@@ -1,0 +1,24 @@
+title = "SilentSec Gitleaks Configuration"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Exclude virtual environments, caches, and generated directories"
+
+# SilentSec runs Gitleaks on "." from inside the repository, so these
+# patterns only match folders within the scanned repository, never its
+# parent folders.
+paths = [
+    '''(^|/)\.venv/.*''',
+    '''(^|/)venv/.*''',
+    '''(^|/)env/.*''',
+    '''(^|/)node_modules/.*''',
+    '''(^|/)dist/.*''',
+    '''(^|/)build/.*''',
+    '''(^|/)[^/]+\.egg-info/.*''',
+    '''(^|/)__pycache__/.*''',
+    '''(^|/)\.(pytest|ruff|mypy)_cache/.*''',
+    '''(^|/)\.git/.*''',
+    '''\.py[cod]$'''
+]

@@ -727,4 +727,5 @@ def test_scan_report_includes_recurrence_components_and_density(tmp_path: Path):
         "recurrence",
     }
     assert debt.analyzed_lines == 4
-    assert debt.debt_density_per_kloc == 500.0
+    # A 4-line repository is below MIN_LINES_FOR_DENSITY, so density is withheld.
+    assert debt.debt_density_per_kloc is None

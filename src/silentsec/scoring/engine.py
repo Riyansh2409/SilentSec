@@ -19,6 +19,7 @@ from silentsec.schemas.finding import Finding, FindingCategory, FindingStatus, S
 from silentsec.scoring.correlation import CorrelationGroup, correlate_findings
 from silentsec.scoring.recurrence import RecurringPattern, detect_recurring_patterns
 
+# These are SilentSec v1 product heuristics, not an industry standard.
 BASE_POINTS: dict[Severity, int] = {
     Severity.CRITICAL: 25,
     Severity.HIGH: 15,
@@ -31,6 +32,7 @@ MAX_REPOSITORY_SCORE = 100.0
 ARCHITECTURE_DEBT_CAP = 25.0
 RECURRENCE_POINTS_PER_EXTRA_FILE = 2.0
 RECURRENCE_POINTS_CAP = 15.0
+MIN_LINES_FOR_DENSITY = 500
 ARCHITECTURE_RISK_THRESHOLDS = {
     "low": 10.0,
     "moderate": 20.0,
@@ -83,6 +85,7 @@ class SecurityDebtReport(BaseModel):
     suppressed_findings_excluded: int = Field(ge=0)
     exact_duplicates_removed: int = Field(ge=0, default=0)
     cross_tool_duplicates_removed: int = Field(ge=0, default=0)
+    same_handler_duplicates_removed: int = Field(ge=0, default=0)
     highest_severity: Severity | None = None
     scored_findings: list[ScoredFinding] = Field(default_factory=list)
     correlation_groups: list[CorrelationGroup] = Field(default_factory=list)
@@ -377,10 +380,12 @@ def score_findings(
     analyzed_lines = (
         _count_nonblank_source_lines(repo_root) if repo_root is not None else None
     )
+    # Density is only meaningful once a repository has enough code; below the
+    # threshold a handful of findings would look like an alarming rate.
     debt_density = (
         round(len(correlation_groups) / (analyzed_lines / 1000), 2)
-        if analyzed_lines
-        else (0.0 if analyzed_lines == 0 else None)
+        if analyzed_lines is not None and analyzed_lines >= MIN_LINES_FOR_DENSITY
+        else None
     )
     effort_summary = dict(
         sorted(Counter(item.remediation_effort for item in scored_findings).items())
@@ -403,6 +408,11 @@ def score_findings(
         for group in correlation_groups
         if group.correlation_type == "cross_tool"
     )
+    same_handler_duplicates_removed = sum(
+        len(group.findings) - 1
+        for group in correlation_groups
+        if group.correlation_type == "same_exception_handler"
+    )
 
     return SecurityDebtReport(
         score=repository_score,
@@ -413,8 +423,11 @@ def score_findings(
         input_findings_count=len(items),
         unique_open_findings_count=len(correlation_groups),
         duplicate_findings_removed=(
-            exact_duplicates_removed + cross_tool_duplicates_removed
+            exact_duplicates_removed
+            + cross_tool_duplicates_removed
+            + same_handler_duplicates_removed
         ),
+        same_handler_duplicates_removed=same_handler_duplicates_removed,
         fixed_findings_excluded=fixed_count,
         suppressed_findings_excluded=suppressed_count,
         highest_severity=highest_severity,

@@ -159,6 +159,66 @@ def _build_evidence(
     )
 
 
+# Rules that all describe the same broad or silent exception handler. When
+# several of these fire on the same handler, they are one logical issue.
+# Keys are (tool, rule_id), both compared case-insensitively.
+EXCEPTION_HANDLER_RULES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("silentsec-arch", "ssec-arch-001"),  # broad / bare except
+        ("silentsec-arch", "ssec-arch-002"),  # swallowed exception
+        ("bandit", "b110"),  # try_except_pass
+        ("bandit", "b112"),  # try_except_continue
+    }
+)
+
+
+def _is_exception_handler_rule(finding: Finding) -> bool:
+    return (finding.tool.casefold(), finding.rule_id.casefold()) in EXCEPTION_HANDLER_RULES
+
+
+def _group_same_exception_handler(
+    findings: list[Finding],
+) -> tuple[list[CorrelationGroup], list[Finding]]:
+    """Merge handler findings that start on the same line of the same file.
+
+    Requiring the same start line, not just overlapping ranges, keeps an
+    outer handler separate from a handler nested inside it.
+    """
+    by_location: dict[tuple[str, int], list[Finding]] = {}
+    remaining: list[Finding] = []
+
+    for finding in findings:
+        if _is_exception_handler_rule(finding):
+            key = (_normalized_path(finding.file_path), finding.start_line)
+            by_location.setdefault(key, []).append(finding)
+        else:
+            remaining.append(finding)
+
+    groups: list[CorrelationGroup] = []
+
+    for key in sorted(by_location):
+        members = by_location[key]
+
+        if len(members) == 1:
+            remaining.extend(members)
+            continue
+
+        groups.append(
+            CorrelationGroup(
+                representative=min(members, key=_representative_key),
+                findings=sorted(members, key=_stable_key),
+                correlation_type="same_exception_handler",
+                reason=(
+                    "Equivalent broad or silent exception-handler rules were "
+                    "reported for the same handler."
+                ),
+                evidence=_build_evidence(members),
+            )
+        )
+
+    return groups, remaining
+
+
 def _representative_key(finding: Finding) -> tuple:
     """Prefer higher severity, then confidence, deterministically."""
     severity_order = {
@@ -232,6 +292,11 @@ def correlate_findings(
                     ),
                 )
             )
+
+    handler_groups, singleton_findings = _group_same_exception_handler(
+        singleton_findings
+    )
+    groups.extend(handler_groups)
 
     singleton_findings.sort(key=_stable_key)
 

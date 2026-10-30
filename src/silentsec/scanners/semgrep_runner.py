@@ -1,4 +1,6 @@
-
+import os
+import re
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +15,35 @@ from .common import (
 )
 from .results import ScannerRunResult
 from .runner_utils import run_json_command
+
+# Offline ruleset shipped inside the package (see rules/semgrep/).
+BUNDLED_SEMGREP_RULES = Path(__file__).resolve().parent.parent / "rules" / "semgrep"
+SEMGREP_CONFIG_ENV = "SILENTSEC_SEMGREP_CONFIG"
+SEMGREP_PER_FILE_TIMEOUT_SECONDS = 30
+SEMGREP_EXCLUDED_DIRECTORIES = (".venv", "venv", "node_modules", "dist", "build", ".git")
+
+_RULE_ID_LINE = re.compile(r"^\s*-\s*id:\s*([A-Za-z0-9_.\-]+)\s*$", re.MULTILINE)
+
+
+@lru_cache(maxsize=1)
+def bundled_rule_ids() -> frozenset[str]:
+    """Read rule IDs from the bundled YAML files without a YAML dependency."""
+    ids: set[str] = set()
+    for rule_file in sorted(BUNDLED_SEMGREP_RULES.glob("*.yml")):
+        ids.update(_RULE_ID_LINE.findall(rule_file.read_text(encoding="utf-8")))
+    return frozenset(ids)
+
+
+def normalize_rule_id(check_id: str) -> str:
+    """Strip the path prefix Semgrep adds to rules loaded from a local file.
+
+    Semgrep reports local rules as "<dotted config path>.<rule id>", which
+    differs between machines and would change finding fingerprints.
+    """
+    for rule_id in bundled_rule_ids():
+        if check_id == rule_id or check_id.endswith(f".{rule_id}"):
+            return rule_id
+    return check_id
 
 
 def parse_semgrep_payload(
@@ -48,6 +79,8 @@ def parse_semgrep_payload(
         if not isinstance(rule_id, str) or not rule_id:
             errors.append(f"Semgrep result {index} is missing its rule ID.")
             continue
+
+        rule_id = normalize_rule_id(rule_id)
 
         if not isinstance(line, int) or line < 1:
             errors.append(f"Semgrep result {index} has an invalid start line.")
@@ -89,32 +122,50 @@ def parse_semgrep_payload(
     return findings, errors
 
 
+def resolve_semgrep_config(config: str | None = None) -> str:
+    """Choose the Semgrep ruleset: explicit argument, env override, or bundled rules.
+
+    The bundled rules work offline. Registry configs such as "p/security-audit"
+    still work when passed explicitly, but they require network access.
+    """
+    if config:
+        return config
+
+    override = os.getenv(SEMGREP_CONFIG_ENV, "").strip()
+    if override:
+        return override
+
+    return str(BUNDLED_SEMGREP_RULES)
+
+
 def run_semgrep(
     repo_path: str | Path,
     timeout_seconds: int = 180,
-    config: str = "p/security-audit",
+    config: str | None = None,
 ) -> ScannerRunResult:
     root = Path(repo_path).expanduser().resolve()
 
     command = [
-      "semgrep",
+        "semgrep",
         "scan",
         "--config",
-        config,
+        resolve_semgrep_config(config),
         "--json",
         "--metrics=off",
+        "--disable-version-check",
+        "--timeout",
+        str(SEMGREP_PER_FILE_TIMEOUT_SECONDS),
         "--quiet",
-        "--exclude",
-        "sample_repositories",
-        "--exclude",
-        ".venv",
-        "--exclude",
-        "node_modules",
-        "--exclude",
-        "dist",
-        "--exclude",
-        "build",
-        str(root),
+        *(
+            argument
+            for directory in SEMGREP_EXCLUDED_DIRECTORIES
+            for argument in ("--exclude", directory)
+        ),
+        # Scan "." from inside the repository (run_json_command uses cwd=root).
+        # With an absolute target, --exclude patterns also match parent
+        # folders, so a repository stored under e.g. ".../build/app" would be
+        # silently skipped.
+        ".",
     ]
 
     return run_json_command(
