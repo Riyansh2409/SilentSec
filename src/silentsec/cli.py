@@ -7,6 +7,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from silentsec.history import HistoryError, TimelineReport, build_timeline
 from silentsec.remediation import FindingSummary, FixVerdict, FixVerificationReport, verify_fix
 from silentsec.remediation.ai_fix import AIFixReport, AIFixStatus, ai_fix_and_verify
 from silentsec.remediation.verify import DEFAULT_REGRESSION_SEVERITY
@@ -136,6 +137,35 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Also run the repository's tests on the patched copy. Executes repository code.",
     )
     fix.add_argument("--json", dest="json_path", type=Path, help="Write the report as JSON.")
+
+    history = subcommands.add_parser(
+        "history",
+        help="Show how security debt changed across recent commits (Time Machine).",
+    )
+    history.add_argument("path", type=Path, help="Git repository (never modified).")
+    history.add_argument(
+        "--commits",
+        type=int,
+        default=10,
+        help="Number of recent commits on the current branch to scan (1-50, default: 10).",
+    )
+    history.add_argument(
+        "--db",
+        type=Path,
+        help="SQLite file for stored scans (default: ~/.cache/silentsec/history/).",
+    )
+    history.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Rescan every commit instead of reusing stored scans.",
+    )
+    history.add_argument("--json", dest="json_path", type=Path, help="Write the timeline as JSON.")
+    history.add_argument(
+        "--timeout",
+        type=int,
+        default=180,
+        help="Per-scanner timeout in seconds (default: 180).",
+    )
     fix.add_argument(
         "--timeout",
         type=int,
@@ -372,6 +402,84 @@ def _run_fix(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     return EXIT_FIX_NOT_CONFIRMED
 
 
+def format_timeline(report: TimelineReport) -> str:
+    """Render the Time Machine as a table, one row per commit."""
+    lines = [
+        f"SilentSec Time Machine: {report.repo_path}",
+        f"Branch {report.branch}, last {len(report.points)} commit(s), oldest first.",
+        "Scores are uncapped so changes stay visible.",
+        "",
+        (
+            f"{'Commit':<9} {'Date':<10} {'Score':>7} {'Change':>7} {'Issues':>6}  "
+            f"{'New':>4} {'Fixed':>5}  Subject"
+        ),
+    ]
+
+    previous = None
+    for point in report.points:
+        change = "" if previous is None else f"{point.raw_score - previous.raw_score:+.1f}"
+        if point.attribution == "baseline":
+            new = fixed = "-"
+        elif point.attribution == "unknown":
+            new = fixed = "?"
+        else:
+            new, fixed = str(len(point.introduced)), str(len(point.fixed))
+        marker = "" if point.complete else "  [incomplete scan]"
+        subject = point.subject if len(point.subject) <= 50 else point.subject[:47] + "..."
+        lines.append(
+            f"{point.short_sha:<9} {point.committed_at[:10]:<10} {point.raw_score:>7.1f} "
+            f"{change:>7} {point.unique_issues:>6}  {new:>4} {fixed:>5}  {subject}{marker}"
+        )
+        previous = point
+
+    peak = report.biggest_increase
+    if peak is not None:
+        index = report.points.index(peak)
+        delta = peak.raw_score - report.points[index - 1].raw_score
+        lines += ["", f"Biggest increase: {peak.short_sha} \"{peak.subject}\" ({delta:+.1f})"]
+        for change in peak.introduced[:8]:
+            lines.append(
+                f"  + [{change.severity.value.upper():<8}] {change.file_path}:{change.start_line}"
+                f"  {change.tool} {change.rule_id}"
+            )
+
+    cached = sum(point.from_cache for point in report.points)
+    lines += ["", f"Stored scans: {report.database} ({cached} reused)", "", "Limitations:"]
+    lines += [f"  - {item}" for item in report.limitations]
+    return "\n".join(lines)
+
+
+def _run_history(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    if args.timeout <= 0 or not 1 <= args.commits <= 50:
+        parser.print_usage(sys.stderr)
+        print("silentsec: --commits must be 1-50 and --timeout positive.", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    def show_progress(index: int, total: int, sha: str) -> None:
+        print(f"Scanning commit {index}/{total} ({sha})...", file=sys.stderr)
+
+    try:
+        report = build_timeline(
+            args.path,
+            commits=args.commits,
+            database=args.db,
+            use_cache=not args.no_cache,
+            timeout_seconds=args.timeout,
+            progress=show_progress,
+        )
+    except HistoryError as exc:
+        print(f"silentsec: {exc}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    print(format_timeline(report))
+
+    if args.json_path is not None:
+        args.json_path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+        print(f"\nJSON timeline written to {args.json_path}")
+
+    return EXIT_OK if all(point.complete for point in report.points) else EXIT_SCAN_INCOMPLETE
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -380,6 +488,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_verify(args, parser)
     if args.command == "fix":
         return _run_fix(args, parser)
+    if args.command == "history":
+        return _run_history(args, parser)
 
     if args.timeout <= 0 or args.max_ai_findings <= 0 or args.top < 0:
         parser.print_usage(sys.stderr)
