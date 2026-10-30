@@ -16,6 +16,7 @@ that accumulate hidden debt in AI-assisted codebases.
 - AI-assisted triage and finding verification.
 - Architectural debt analysis using Python AST parsing.
 - Fix + Verify: check a proposed patch in an isolated copy and report what it fixed and broke.
+- AI fix proposals: an AI provider suggests a fix, which is then verified the same way.
 
 ## Installation
 
@@ -183,13 +184,39 @@ Limitations, also printed with every report:
   and cache folders) are not verified.
 - Git must be installed and on `PATH`.
 
+## AI Fix Proposals
+
+`silentsec fix` asks the configured AI provider for a fix to one finding and
+verifies it before showing it to you:
+
+```powershell
+silentsec fix path\to\repository                         # top security finding
+silentsec fix path\to\repository --finding FINGERPRINT --out fix.diff
+```
+
+- The model sees only the finding and a numbered, redacted window of the code
+  (the enclosing Python function, or about 25 lines around the finding). It
+  never sees secret values, and secret findings are refused: they need the
+  credential rotated, not a code edit.
+- The model returns line edits, not a diff. SilentSec rejects edits outside
+  the shown lines, overlapping edits, edits to redacted lines, and edits that
+  change nothing, then builds the patch itself.
+- The patch then goes through `silentsec verify` in an isolated copy, using the
+  finding and any findings merged with it (for example the same SQL injection
+  from Semgrep and Bandit) as targets.
+- Nothing is applied to your repository. `--out` saves the patch so you can
+  review it and apply it yourself with `git apply`.
+- Providers are tried in order (Gemini primary, Gemini fallback, Groq); an
+  invalid answer moves to the next provider.
+
+A verified AI fix is evidence, not proof, and always needs human review.
+
 ## Planned Capabilities
 
 - Broader multi-language architectural analysis.
 - MCP tools for controlled analysis operations.
 - LangSmith tracing and evaluation.
 - Security-debt history across Git commits.
-- AI-generated fix proposals feeding `silentsec verify` (verification itself is implemented).
 - Docker packaging.
 
 ## Continuous Integration
