@@ -77,13 +77,13 @@ def test_clone_uses_a_safe_git_command(tmp_path: Path, monkeypatch):
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setenv("GITHUB_TOKEN", "secret-value")
-    monkeypatch.setattr(sources.subprocess, "run", fake_run)
+    monkeypatch.setattr(sources, "run_bounded", fake_run)
 
     prepared = sources.clone_github("https://github.com/owner/repo", tmp_path / "src", depth=5)
 
     command, kwargs = calls[0]
     assert prepared.name == "owner/repo" and prepared.is_git
-    assert kwargs["shell"] is False and kwargs["timeout"] > 0
+    assert kwargs["timeout"] > 0
     assert "credential.helper=" in command
     assert "--depth=5" in command and "--no-recurse-submodules" in command
     assert command[-3:] == ["--", "https://github.com/owner/repo.git", str(tmp_path / "src")]
@@ -95,7 +95,7 @@ def test_missing_or_private_repository_has_a_clear_message(tmp_path: Path, monke
     def fake_run(command, **kwargs):
         return subprocess.CompletedProcess(command, 128, "", "remote: Repository not found.")
 
-    monkeypatch.setattr(sources.subprocess, "run", fake_run)
+    monkeypatch.setattr(sources, "run_bounded", fake_run)
 
     with pytest.raises(SourceError, match="not found or is private"):
         sources.clone_github("https://github.com/owner/repo", tmp_path / "src")

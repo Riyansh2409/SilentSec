@@ -21,6 +21,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from silentsec.process import run_bounded
 from silentsec.remediation.patch import validate_patch
 from silentsec.remediation.sandbox import (
     apply_patch,
@@ -182,17 +183,9 @@ def _run_tests(
 ) -> TestRunResult:
     """Run repository tests in the copy. This executes repository code."""
     try:
-        completed = subprocess.run(  # nosec B603
-            list(command),
-            cwd=root,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout_seconds,
-            check=False,
-            shell=False,
-            env=sanitized_environment(),
+        # Tests can start servers or workers; on timeout the whole tree is killed.
+        completed = run_bounded(
+            command, cwd=root, timeout=timeout_seconds, env=sanitized_environment()
         )
     except subprocess.TimeoutExpired:
         return TestRunResult(command=list(command), timed_out=True)
