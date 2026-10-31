@@ -41,6 +41,7 @@ from silentsec.api.sources import (
     clone_github,
     extract_upload,
 )
+from silentsec.architecture.debt_views import DebtViews
 from silentsec.history import HistoryError, TimelineReport, build_timeline
 from silentsec.remediation.verify import (
     FindingSummary,
@@ -165,6 +166,7 @@ class ScanResponse(BaseModel):
     timeline: TimelineReport | None = None
     timeline_note: str | None = None
     report_url: str
+    debt_views: DebtViews | None = None
 
 
 class ScanListItem(BaseModel):
@@ -367,6 +369,7 @@ def create_app(
             created_at=created.isoformat(),
             source=source,
             summary=_summary(result),
+            debt_views=result.debt_views,
             scanners=[
                 ScannerInfo(
                     name=scanner.scanner,

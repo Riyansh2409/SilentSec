@@ -1,5 +1,6 @@
 import {scanIncomplete,reintroducedChanges,returnedCount,findingTags,mergeInfo,exposureOf,aiDisclosure,scoredView,nativeIssueView,triageAttributionText} from './data.js';
 import * as api from './api.js';
+import {debtViews} from './debt-views.js';
 
 const $=id=>document.getElementById(id);
 const state={health:null,view:'overview',jobs:[],busy:null,results:{},fixMode:'ai',selectedFingerprint:'',detailSequence:0};
@@ -94,6 +95,7 @@ function renderOverview(view){
  scanners.append(note(`Total duration: ${number(d.duration_seconds)}s · Languages: ${(d.languages||[]).join(', ')||'Not detected'}`));
  for(const component of s.components||[]){const block=el('div','breakdown');append(block,append(el('div','row'),el('span','',human(component.name)+(component.informational?' · informational':'')),el('b','',number(component.points))));if(!component.informational&&component.points>0){const bar=el('div','bar'),fill=el('i');fill.style.width=Math.min(100,component.points/Math.max(1,s.score)*100)+'%';bar.append(fill);block.append(bar)}block.append(note(component.explanation));components.append(block)}
  if(s.exposure_limitations?.length)components.append(el('h3','','Exposure analysis limits'),list(s.exposure_limitations));components.append(note(`Analyzed nonblank lines: ${number(s.analyzed_lines)} · Issues / 1,000 lines: ${number(s.debt_density_per_kloc)}`));append(columns,scanners,components);view.append(columns);
+ view.append(debtViews(d.debt_views,path=>showFileFindings(entry,path)));
  const triage=panel('AI triage');append(triage,badge(!d.triage_attempted?'not_requested':d.triage_complete?'success':'partial'),note(`${d.triage_results?.length||0} explanations · ${number(d.triage_provider_calls)} provider calls · ${number(d.triage_cache_hits)} cache hits`),formatErrors(d.triage_errors));view.append(triage);
  const findingPanel=panel();findingPanel.append(sectionHead('Prioritize the findings',button('View all findings →',()=>{location.hash='findings'})));const items=logicalFindings(d).slice(0,5);if(items.length)findingPanel.append(findingTable(items,entry));else findingPanel.append(note('No open findings were returned. Interpret this alongside scanner completeness.'));view.append(findingPanel);
  const patterns=s.recurring_patterns||[];if(patterns.length){const p=panel('Recurring patterns');for(const pattern of patterns){append(p,append(el('div','pattern'),el('strong','',pattern.representative_message),note(`${pattern.file_count} files · ${pattern.occurrence_count} occurrences`),el('p','mono',(pattern.files||[]).join(' · '))))}view.append(p)}
@@ -196,6 +198,7 @@ function renderSources(view){
  if(!summary.complete)view.append(el('div','notice','Incomplete scan: one or more scanners did not complete successfully. Review coverage below.'));
  const stats=el('div','stats');append(stats,stat('Security debt',number(summary.score),`Uncapped: ${number(summary.raw_score)}`,'/100'),stat('Security risk',human(summary.security_risk),`${number(summary.security_points)} security points`),stat('Architecture risk',human(summary.architecture_risk),`${number(summary.architecture_points)} architecture points`),stat('Unique issues',number(summary.unique_issues),`${number(summary.duplicates_merged)} duplicates merged`));view.append(stats);
  const coverage=panel('Scanner coverage');for(const scanner of data.scanners||[])append(coverage,append(el('div','scanner'),append(el('div','row'),el('strong','',scanner.name),badge(scanner.status)),note(`${scanner.findings} findings · ${number(scanner.duration_seconds)}s`),formatErrors(scanner.errors)));view.append(coverage);
+ view.append(debtViews(data.debt_views,path=>showFileFindings(entry,path)));
  const items=(data.issues||[]).map(nativeIssueView);
  const findings=panel('Source findings'),search=el('input');search.type='search';search.placeholder='Search findings and source paths';search.setAttribute('aria-label','Search source findings');search.style.width='100%';const results=el('div');append(findings,search,results);function filter(){const matched=items.filter(f=>(f.message+' '+f.file_path+' '+f.rule_id).toLowerCase().includes(search.value.toLowerCase()));results.replaceChildren(el('p','result-count',`${matched.length} findings`),matched.length?findingTable(matched,entry):note('No matching findings.'))}search.addEventListener('input',filter);filter();view.append(findings);
  const history=panel('Commit history');if(data.timeline){append(history,note(`${returnedCount(data.timeline.points)} issue(s) came back after being fixed`),chart(data.timeline.points));const table=el('table'),head=el('tr');for(const value of ['Commit','Change','Uncapped score','Attribution'])head.append(el('th','',value));table.append(head);for(const point of data.timeline.points)append(table,append(el('tr'),el('td','mono',point.short_sha),append(el('td'),cameBack(point),el('span','',point.subject)),el('td','mono',number(point.raw_score)),append(el('td'),badge(point.attribution))));const wrap=el('div','table-wrap');wrap.append(table);history.append(wrap)}else history.append(note(data.timeline_note||'History was not included.'));view.append(history);
@@ -235,4 +238,11 @@ function exposurePanel(finding,limitations){
  panel.append(note('A call path in source code does not prove exploitability.'));
  if(limitations?.length)panel.append(list(limitations));
  return panel;
+}
+
+function showFileFindings(entry,path){
+ const detail=$('finding-detail');detail.replaceChildren(el('h2','',path));detail.querySelector('h2').id='finding-title';
+ const items=entry.data.issues?entry.data.issues.map(nativeIssueView):logicalFindings(entry.data);
+ detail.append(findingTable(items.filter(f=>f.file_path.replaceAll('\\','/')===path.replaceAll('\\','/')),entry));
+ $('finding-dialog').showModal();
 }

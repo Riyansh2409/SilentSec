@@ -16,6 +16,7 @@ from hashlib import sha256
 from silentsec.history import TimelineReport
 from silentsec.remediation.ai_fix import AIFixReport, AIFixStatus
 from silentsec.remediation.verify import FindingSummary, FixVerdict, FixVerificationReport
+from silentsec.report.debt_views import render_debt_views
 from silentsec.scanners.results import ScannerStatus
 from silentsec.scanners.scanner_service import RepositoryScanResult
 from silentsec.schemas import FindingCategory, Severity
@@ -710,6 +711,7 @@ def render_report(
         "to a finding below.</p>"
         f"{_composition(scan)}{_facts(scan)}{_scanners(scan)}</section>"
         f"{_findings(scan, snippets or {})}"
+        f"{render_debt_views(scan.debt_views)}"
         f"{_patterns(scan)}"
         f"{_timeline(timeline, timeline_note)}"
         f"{_fixes(fixes)}"
