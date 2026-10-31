@@ -172,6 +172,8 @@ button { font: inherit; color: var(--violet); background: var(--surface); border
 .chart .dot { fill: var(--surface); stroke: var(--blue); stroke-width: 2.5; }
 .chart .dot.peak { fill: var(--sev-critical); stroke: var(--sev-critical); }
 .chart .dot.incomplete { stroke: var(--sev-info); stroke-dasharray: 2 2; }
+.chart .back-ring { fill: none; stroke: var(--sev-high); stroke-width: 2; }
+.changes li.back { color: var(--sev-high); font-weight: 600; }
 .changes.incomplete { color: var(--sev-high); }
 .chart .label { fill: var(--ink); font-weight: 600; }
 .up { color: var(--sev-critical); }
@@ -465,6 +467,12 @@ def _timeline_chart(report: TimelineReport) -> str:
     )
     parts.append(f'<path class="line" d="{path}"/>')
     for index, point in enumerate(points):
+        if point.reintroduced:
+            parts.append(
+                f'<circle class="back-ring" cx="{x(index):.1f}" cy="{y(point.raw_score):.1f}" r="10">'
+                f"<title>{_e(point.short_sha)}: {_plural(len(point.reintroduced), 'issue')} "
+                "came back after being fixed</title></circle>"
+            )
         peak = biggest is not None and point.commit_sha == biggest.commit_sha
         state = " peak" if peak else "" if point.complete else " incomplete"
         parts.append(
@@ -491,14 +499,22 @@ def _timeline_chart(report: TimelineReport) -> str:
     )
 
 
+def _change_item(change, sign: str) -> str:
+    location = f'<span class="loc">{_e(change.file_path)}:{change.start_line}</span>'
+    if getattr(change, "reintroduced", False):
+        return (
+            f'<li class="back">Came back: {_e(change.tool)} {_e(change.rule_id)} at {location} '
+            f"(fixed in {_e(change.previously_fixed_in or 'an earlier commit')})</li>"
+        )
+    return f"<li>{sign} {_e(change.tool)} {_e(change.rule_id)} at {location}</li>"
+
+
 def _change_list(changes: Sequence, sign: str) -> str:
     if not changes:
         return ""
-    items = "".join(
-        f"<li>{sign} {_e(change.tool)} {_e(change.rule_id)} at "
-        f'<span class="loc">{_e(change.file_path)}:{change.start_line}</span></li>'
-        for change in changes[:6]
-    )
+    # Issues that came back are listed first: they are the most telling.
+    ordered = sorted(changes, key=lambda change: not getattr(change, "reintroduced", False))
+    items = "".join(_change_item(change, sign) for change in ordered[:6])
     more = f"<li>and {len(changes) - 6} more</li>" if len(changes) > 6 else ""
     return f'<ul class="changes">{items}{more}</ul>'
 
@@ -546,6 +562,12 @@ def _timeline(report: TimelineReport | None, note: str | None) -> str:
         if biggest is not None
         else "Debt did not rise in this window."
     )
+    came_back = report.reintroduced
+    if came_back:
+        lede += (
+            f" {_plural(len(came_back), 'issue')} came back after being fixed "
+            "(ringed in the chart)."
+        )
     limits = "".join(f"<li>{_e(item)}</li>" for item in report.limitations)
     return (
         "<h2>Over time</h2>"

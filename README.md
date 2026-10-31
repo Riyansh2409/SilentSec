@@ -256,6 +256,11 @@ Biggest increase: df4edacf "Add settings" (+15.5)
   commit that changed them. The oldest commit in the window is the baseline.
   When a scan is incomplete (a scanner failed), changes next to it show `?`.
 - Scores here are uncapped, so changes stay visible above 100.
+- An issue that was fixed by one commit and brought back by a later one is
+  listed under "Came back after a fix", with both commits. The HTML report
+  rings that commit in the chart, and the API marks it with
+  `"reintroduced": true` and `"previously_fixed_in"`. Only fixes inside the
+  scanned window are known, so `--commits` decides how far back this looks.
 - Results are stored in SQLite under `~/.cache/silentsec/history/` (or
   `--db`), keyed by commit and by the SilentSec version and rules used, so a
   second run only scans new commits. `--no-cache` rescans everything.

@@ -33,6 +33,7 @@ from silentsec.scanners.scanner_service import RepositoryScanResult, scan_reposi
 from silentsec.schemas import Finding, FindingCategory, Severity
 from silentsec.triage.sanitization import redact_sensitive_text
 from silentsec.verification import VerificationStatus, compare_findings
+from silentsec.verification.engine import _identity as finding_identity
 
 MAX_COMMITS = 50
 MAX_ARCHIVE_BYTES = 300 * 1024 * 1024
@@ -50,6 +51,10 @@ class FindingChange(BaseModel):
     start_line: int
     severity: Severity
     category: FindingCategory
+    # True when this issue was fixed by an earlier commit in the window and
+    # this commit brought it back; previously_fixed_in names that commit.
+    reintroduced: bool = False
+    previously_fixed_in: str | None = None
 
 
 class TimelinePoint(BaseModel):
@@ -71,6 +76,10 @@ class TimelinePoint(BaseModel):
     fixed: list[FindingChange] = Field(default_factory=list)
     # Which scanner failed and why, for incomplete scans.
     scanner_problems: list[str] = Field(default_factory=list)
+
+    @property
+    def reintroduced(self) -> list[FindingChange]:
+        return [change for change in self.introduced if change.reintroduced]
 
 
 class TimelineReport(BaseModel):
@@ -97,6 +106,11 @@ class TimelineReport(BaseModel):
             if delta > 0 and (best is None or delta > best[0]):
                 best = (delta, current)
         return best[1] if best else None
+
+    @property
+    def reintroduced(self) -> list[tuple[TimelinePoint, FindingChange]]:
+        """Issues that were fixed and later came back, with the commit that brought them back."""
+        return [(point, change) for point in self.points for change in point.reintroduced]
 
 
 ScanFunction = Callable[..., RepositoryScanResult]
@@ -305,6 +319,8 @@ def build_timeline(
 
     points: list[TimelinePoint] = []
     previous: StoredScan | None = None
+    # Issue identity -> short sha of the commit that most recently fixed it.
+    last_fixed: dict[tuple[str, str, str], str] = {}
 
     for stored, from_cache in stored_scans:
         point = TimelinePoint(
@@ -328,12 +344,17 @@ def build_timeline(
             point.attribution = "unknown"
         else:
             comparison = compare_findings(previous.findings, stored.findings, scan_complete=True)
-            point.introduced = [_change(finding) for finding in comparison.new_findings]
-            point.fixed = [
-                _change(result.baseline_finding)
-                for result in comparison.results
-                if result.status == VerificationStatus.RESOLVED
-            ]
+            for finding in comparison.new_findings:
+                change = _change(finding)
+                fixed_in = last_fixed.pop(finding_identity(finding), None)
+                if fixed_in is not None:
+                    change.reintroduced = True
+                    change.previously_fixed_in = fixed_in
+                point.introduced.append(change)
+            for result in comparison.results:
+                if result.status == VerificationStatus.RESOLVED:
+                    point.fixed.append(_change(result.baseline_finding))
+                    last_fixed[finding_identity(result.baseline_finding)] = point.short_sha
 
         points.append(point)
         previous = stored
