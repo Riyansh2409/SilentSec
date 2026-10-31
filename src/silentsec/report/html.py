@@ -150,6 +150,9 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .sev-info { color: var(--sev-info); }
 .loc { font-family: var(--mono); font-size: 0.85rem; white-space: nowrap; }
 .tools { color: var(--muted); font-size: 0.85rem; overflow-wrap: anywhere; }
+.exposure { display: inline-block; margin-top: 4px; border: 1px solid var(--sev-high); color: var(--sev-high);
+  border-radius: 999px; padding: 1px 10px; font-size: 0.78rem; font-weight: 600; }
+.exposure-path { font-family: var(--mono); font-size: 0.85rem; margin: 4px 0; padding-left: 18px; }
 .table-wrap { overflow-x: auto; }
 th { white-space: nowrap; }
 .finding-title { font-weight: 600; }
@@ -363,6 +366,19 @@ def _findings(result: RepositoryScanResult, snippets: dict[str, str]) -> str:
                 f'<ol class="plain">{steps}</ol>'
             )
 
+        badge_html = exposure_html = ""
+        if item.exposure == "reachable":
+            badge_html = (
+                '<div><span class="exposure" title="A call path from a web route exists in the '
+                'code; this does not prove the issue is exploitable.">Reachable from the web</span></div>'
+            )
+            steps = "".join(f"<li>{_e(step)}</li>" for step in item.exposure_path)
+            exposure_html = (
+                "<p><b>Reachable in the call graph</b> (a path exists in the code; this does "
+                "not prove the issue is exploitable):</p>"
+                f'<ol class="exposure-path">{steps}</ol>'
+            )
+
         cwe = f" {finding.cwe_id}" if finding.cwe_id else ""
         rows.append(
             f'<tbody data-severity="{_e(finding.severity.value)}">'
@@ -370,14 +386,14 @@ def _findings(result: RepositoryScanResult, snippets: dict[str, str]) -> str:
             f'<td><span class="{_severity_class(finding.severity)}">'
             f"{_severity_label(finding.severity)}</span></td>"
             f'<td><div class="finding-title">{_e(title)}</div>'
-            f'<div class="tools">{_e(", ".join(tools))}{_e(cwe)}</div></td>'
+            f'<div class="tools">{_e(", ".join(tools))}{_e(cwe)}</div>{badge_html}</td>'
             f'<td class="loc">{_e(finding.file_path)}:{finding.start_line}</td>'
             f'<td class="num hide-narrow">{item.score:.1f}</td>'
             f'<td class="hide-narrow">{_e(item.remediation_effort.capitalize())}</td>'
             "</tr>"
             '<tr class="detail"><td></td><td colspan="4">'
             '<details class="evidence"><summary>Evidence and score</summary>'
-            f"<p>{_e(message)}</p>{merged}{snippet_html}{triage_html}"
+            f"<p>{_e(message)}</p>{merged}{snippet_html}{exposure_html}{triage_html}"
             f'<p class="explain">{_e(item.explanation)}</p>'
             "</details></td></tr></tbody>"
         )

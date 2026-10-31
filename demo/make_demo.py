@@ -14,7 +14,9 @@ it a <folder>-patches folder and a <folder>.zip:
   bad_fix.diff                                           -> verify: REGRESSION
   <folder>.zip       the main branch, for the API upload endpoints
 
-Nothing here is executed; it is only scanned.
+app/db.py is a small Flask app: search_products() is called from the
+GET /search route (reachable, so its SQL injection counts x1.25), while
+find_user() has no route. Nothing here is executed; it is only scanned.
 """
 
 import subprocess  # nosec B404 - runs git with fixed argument lists
@@ -25,6 +27,10 @@ from pathlib import Path
 FAKE_KEY = "ghp_" + "Zx9Qw" + "R7tYu1Io3Pa5Sd7Fg9Hj2Kl4Zx6Cv8Bn0Mq"
 
 DB = '''import sqlite3
+
+from flask import Flask, request
+
+app = Flask(__name__)
 
 
 def connect():
@@ -48,6 +54,11 @@ def search_products(term):
         return cursor.fetchall()
     except Exception:
         pass
+
+
+@app.route("/search")
+def search():
+    return {"results": search_products(request.args.get("q", ""))}
 '''
 
 ADMIN = f'''import os
