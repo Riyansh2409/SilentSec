@@ -323,3 +323,110 @@ def test_cors_allows_only_configured_origins():
 
     assert allowed.headers.get("access-control-allow-origin") == "http://localhost:5173"
     assert "access-control-allow-origin" not in other.headers
+
+
+# --- verify endpoints ---------------------------------------------------------------
+
+PATCH = "--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-eval(input())\n+print(input())\n"
+
+
+class FakeVerify:
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, root, diff_text, **kwargs):
+        from silentsec.remediation import FixVerdict, FixVerificationReport
+
+        self.calls.append((root, diff_text, kwargs, sorted(p.name for p in root.iterdir())))
+        return FixVerificationReport(
+            verdict=FixVerdict.VERIFIED_FIX,
+            reasons=["All 1 targeted finding(s) are resolved."],
+            patch_files=["app.py"],
+            score_before=12.0,
+            score_after=0.0,
+            checks_run=["semgrep (success)"],
+            diff_text=diff_text,
+            limitations=["Repository tests were not run (run_tests=False)."],
+        )
+
+
+@pytest.fixture
+def verify_client():
+    fake = FakeVerify()
+
+    def fake_clone(url, destination, *, depth=1):
+        sources.parse_github_url(url)
+        destination.mkdir(parents=True)
+        (destination / "app.py").write_text("eval(input())\n", encoding="utf-8")
+        return PreparedSource(root=destination, name="owner/repo", is_git=True)
+
+    return make_client(scan=fake_scan, clone=fake_clone, verify=fake), fake
+
+
+def test_verify_upload_never_runs_repository_tests(verify_client):
+    client, fake = verify_client
+
+    response = client.post(
+        "/api/verify/upload",
+        files={
+            "file": ("app.py", b"eval(input())\n", "text/x-python"),
+            "patch": ("fix.diff", PATCH.encode(), "text/plain"),
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["verdict"] == "verified_fix"
+    assert body["score_before"] == 12.0 and body["score_after"] == 0.0
+    assert body["source"] == {"type": "upload", "name": "app.py", "url": None}
+    _root, diff_text, kwargs, files = fake.calls[0]
+    assert diff_text == PATCH and files == ["app.py"]
+    assert kwargs["run_tests"] is False
+    assert "diff_text" not in body
+
+
+@pytest.mark.parametrize(
+    "data", [PATCH.encode("utf-16"), b"\xef\xbb\xbf" + PATCH.encode()], ids=["utf16", "bom"]
+)
+def test_verify_upload_accepts_windows_patch_encodings(verify_client, data):
+    client, fake = verify_client
+
+    response = client.post(
+        "/api/verify/upload",
+        files={"file": ("app.py", b"x\n", "text/plain"), "patch": ("fix.diff", data, "text/plain")},
+    )
+
+    assert response.status_code == 200
+    assert fake.calls[0][1] == PATCH
+
+
+def test_verify_github_passes_targets(verify_client):
+    client, fake = verify_client
+
+    body = client.post(
+        "/api/verify/github",
+        json={"url": "https://github.com/owner/repo", "patch": PATCH, "targets": ["fp1"]},
+    ).json()
+
+    assert body["verdict"] == "verified_fix"
+    assert body["source"]["name"] == "owner/repo"
+    assert fake.calls[0][2]["target_fingerprints"] == ["fp1"]
+    assert fake.calls[0][2]["run_tests"] is False
+
+
+def test_verify_rejects_bad_input(verify_client):
+    client, fake = verify_client
+
+    empty = client.post(
+        "/api/verify/github", json={"url": "https://github.com/owner/repo", "patch": "  "}
+    )
+    bad_link = client.post("/api/verify/github", json={"url": "file:///etc", "patch": PATCH})
+    not_text = client.post(
+        "/api/verify/upload",
+        files={"file": ("a.py", b"x", "text/plain"), "patch": ("p.diff", b"\xff\x00\xfe", "x")},
+    )
+
+    assert empty.status_code == 400 and "empty" in empty.json()["detail"]
+    assert bad_link.status_code == 400
+    assert not_text.status_code == 400
+    assert fake.calls == []

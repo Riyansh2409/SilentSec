@@ -6,6 +6,8 @@ interactive documentation. Endpoints:
     GET  /api/health                 versions and which scanners are installed
     POST /api/scan/github            {"url": "https://github.com/owner/repo"}
     POST /api/scan/upload            multipart form, field "file" (.zip or one source file)
+    POST /api/verify/github          {"url": ..., "patch": "<unified diff>"}
+    POST /api/verify/upload          multipart form, fields "file" and "patch"
     GET  /api/scans                  recent scans (newest first)
     GET  /api/scans/{id}             the full JSON result of one scan
     GET  /api/scans/{id}/report      the self-contained HTML report
@@ -40,6 +42,12 @@ from silentsec.api.sources import (
     extract_upload,
 )
 from silentsec.history import HistoryError, TimelineReport, build_timeline
+from silentsec.remediation.verify import (
+    FindingSummary,
+    FixVerdict,
+    FixVerificationReport,
+    verify_fix,
+)
 from silentsec.report import _snippets
 from silentsec.report.html import render_report
 from silentsec.scanners.scanner_service import RepositoryScanResult, scan_repository
@@ -53,6 +61,7 @@ DEFAULT_CORS_ORIGINS = (
 MAX_STORED_SCANS = 20
 MAX_CONCURRENT_SCANS = 2
 MAX_HISTORY_COMMITS = 20
+MAX_PATCH_BYTES = 1024 * 1024
 
 
 # --- request and response models ---------------------------------------------
@@ -65,6 +74,21 @@ class GitHubScanRequest(BaseModel):
         ge=0,
         le=MAX_HISTORY_COMMITS,
         description="How many recent commits the Time Machine scans; 0 turns history off.",
+    )
+    timeout_seconds: int = Field(default=180, ge=10, le=900)
+
+
+class GitHubVerifyRequest(BaseModel):
+    url: str = Field(examples=["https://github.com/owner/repo"])
+    patch: str = Field(
+        description="A unified diff, e.g. from 'git diff --relative', with paths "
+        "relative to the repository root.",
+        max_length=MAX_PATCH_BYTES,
+    )
+    targets: list[str] | None = Field(
+        default=None,
+        description="Fingerprints of the issues the patch should fix. Default: the "
+        "issues on the lines the patch changes.",
     )
     timeout_seconds: int = Field(default=180, ge=10, le=900)
 
@@ -213,6 +237,33 @@ def _summary(result: RepositoryScanResult) -> Summary | None:
     )
 
 
+class VerifyResponse(BaseModel):
+    id: str
+    created_at: str
+    source: "SourceInfo"
+    verdict: FixVerdict
+    reasons: list[str]
+    patch_files: list[str]
+    targets: list[FindingSummary]
+    resolved: list[FindingSummary]
+    remaining: list[FindingSummary]
+    new: list[FindingSummary]
+    score_before: float | None
+    score_after: float | None
+    raw_score_before: float | None
+    raw_score_after: float | None
+    checks_run: list[str]
+    line_endings_normalized: bool
+    limitations: list[str]
+
+
+def decode_patch(data: bytes) -> str:
+    """Decode a patch, accepting the encodings Windows tools commonly produce."""
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16")
+    return data.decode("utf-8-sig")
+
+
 class _StoredScan(BaseModel):
     response: ScanResponse
     html: str
@@ -230,6 +281,7 @@ def create_app(
     cors_origins: tuple[str, ...] | list[str] = DEFAULT_CORS_ORIGINS,
     scan: ScanFunction = scan_repository,
     clone: CloneFunction = clone_github,
+    verify: Callable[..., FixVerificationReport] = verify_fix,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> FastAPI:
     app = FastAPI(
@@ -371,6 +423,97 @@ def create_app(
             lambda destination: extract_upload(file_name, data, destination),
             SourceInfo(type="upload", name=file_name),
             history_commits=0,
+            timeout_seconds=180,
+        )
+
+    def run_verify(
+        prepare: Callable[[Path], PreparedSource],
+        source: SourceInfo,
+        patch_text: str,
+        *,
+        targets: list[str] | None,
+        timeout_seconds: int,
+    ) -> VerifyResponse:
+        if not patch_text.strip():
+            raise HTTPException(400, "The patch is empty.")
+        if not scan_slots.acquire(blocking=False):
+            raise HTTPException(429, "The server is busy with other scans. Try again shortly.")
+        workspace = Path(tempfile.mkdtemp(prefix="silentsec-api-"))
+        try:
+            try:
+                prepared = prepare(workspace / "src")
+            except SourceError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            # Repository tests are never run: that would execute untrusted code.
+            report = verify(
+                prepared.root,
+                patch_text,
+                target_fingerprints=targets,
+                run_tests=False,
+                timeout_seconds=timeout_seconds,
+                scan=scan,
+            )
+        finally:
+            shutil.rmtree(workspace, ignore_errors=True)
+            scan_slots.release()
+
+        return VerifyResponse(
+            id=uuid.uuid4().hex,
+            created_at=now().isoformat(),
+            source=source.model_copy(update={"name": prepared.name}),
+            **report.model_dump(
+                include={
+                    "verdict",
+                    "reasons",
+                    "patch_files",
+                    "targets",
+                    "resolved",
+                    "remaining",
+                    "new",
+                    "score_before",
+                    "score_after",
+                    "raw_score_before",
+                    "raw_score_after",
+                    "checks_run",
+                    "line_endings_normalized",
+                    "limitations",
+                }
+            ),
+        )
+
+    @app.post("/api/verify/github", response_model=VerifyResponse)
+    def verify_github(request: GitHubVerifyRequest) -> VerifyResponse:
+        return run_verify(
+            lambda destination: clone(request.url, destination, depth=1),
+            SourceInfo(type="github", name=request.url, url=request.url.strip()),
+            request.patch,
+            targets=request.targets,
+            timeout_seconds=request.timeout_seconds,
+        )
+
+    @app.post("/api/verify/upload", response_model=VerifyResponse)
+    def verify_upload(
+        file: UploadFile = File(...),  # noqa: B008
+        patch: UploadFile = File(...),  # noqa: B008
+    ) -> VerifyResponse:
+        data = file.file.read(MAX_UPLOAD_BYTES + 1)
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                413, f"Uploads are limited to {MAX_UPLOAD_BYTES // (1024 * 1024)} MB."
+            )
+        patch_bytes = patch.file.read(MAX_PATCH_BYTES + 1)
+        if len(patch_bytes) > MAX_PATCH_BYTES:
+            raise HTTPException(413, "The patch is larger than 1 MB.")
+        try:
+            patch_text = decode_patch(patch_bytes)
+        except UnicodeDecodeError as exc:
+            raise HTTPException(400, "The patch is not UTF-8 or UTF-16 text.") from exc
+        file_name = file.filename or "upload"
+        return run_verify(
+            lambda destination: extract_upload(file_name, data, destination),
+            SourceInfo(type="upload", name=file_name),
+            patch_text,
+            targets=None,
             timeout_seconds=180,
         )
 
