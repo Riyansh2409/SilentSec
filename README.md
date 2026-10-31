@@ -453,6 +453,26 @@ Safety:
 - The server listens on this computer only by default. `--host 0.0.0.0` lets
   other devices on the network start scans; use it only on a network you trust.
 
+## Demo
+
+`demo/make_demo.py` builds a small, deliberately vulnerable repository (the API
+key in it is fake) with known results, for demos and for trying SilentSec:
+
+```powershell
+python demo/make_demo.py C:\demo\shop
+cd C:\demo\shop
+silentsec scan .
+silentsec gate . --base main --head feature/bad-fix     # FAIL: the "fix" adds os.system
+silentsec gate . --base main --head feature/good-fix    # PASS: SQL injection fixed
+silentsec history . --commits 10                        # "Add admin tools (AI-generated)" adds the most debt
+silentsec verify . --patch ..\shop-patches\bad_fix.diff # REGRESSION
+silentsec report . --out ..\report.html
+```
+
+It also writes `C:\demo\shop.zip` (the `main` branch) and the two patches,
+which are the files to try with the API's upload and verify endpoints. The
+script refuses to write into a folder that is not empty.
+
 ## Planned Capabilities
 
 - Broader multi-language architectural analysis.
