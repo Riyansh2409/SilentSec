@@ -41,7 +41,7 @@ def test_kit_creates_repository_branches_patches_and_zip(demo: Path):
 
 def test_kit_refuses_a_non_empty_folder(demo: Path):
     completed = subprocess.run(
-        [sys.executable, str(KIT), str(demo)], capture_output=True, text=True
+        [sys.executable, str(KIT), str(demo)], capture_output=True, text=True, check=False
     )
     assert completed.returncode != 0
     assert "is not empty" in completed.stderr
