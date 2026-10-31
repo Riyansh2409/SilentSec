@@ -294,6 +294,34 @@ malicious repository cannot run code in the viewer's browser. Secret values and
 the code around secret findings are never included. It follows the system
 light or dark theme and prints cleanly.
 
+## Pull-Request Security Gate
+
+`silentsec gate` decides whether a change adds security debt. It scans the
+base and the head version, then sorts every finding:
+
+- **NEW**: in head but not in base, so the change introduced it
+- **EXISTING**: already in base; old debt never blocks the change
+- **RESOLVED**: in base but gone in head
+
+```bash
+silentsec gate . --base main --head HEAD
+silentsec gate . --base main --head feature/login --fail-on medium --json gate.json
+```
+
+| Result | Exit code | When |
+|---|---|---|
+| PASS | 0 | no new security or secret finding at or above `--fail-on` (default `high`) |
+| FAIL | 1 | at least one such new finding |
+| INCOMPLETE | 2 | a scanner failed on either version, so "nothing new" cannot be confirmed |
+
+New architecture/maintainability findings are warnings; add
+`--fail-on-architecture` to make them fail the gate. Base is compared at the
+merge base of `--base` and `--head`, so commits that landed on the base
+branch after the head branch was created are not blamed on it. Both versions
+are exported with `git archive` into temporary folders; the repository and
+its working tree are not modified, and uncommitted changes are ignored. The
+exit codes make it usable as a CI step.
+
 ## HTTP API (for a web frontend)
 
 `silentsec serve` starts an HTTP API so a web page can scan a public GitHub
