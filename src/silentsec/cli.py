@@ -11,6 +11,7 @@ from silentsec.history import HistoryError, TimelineReport, build_timeline
 from silentsec.remediation import FindingSummary, FixVerdict, FixVerificationReport, verify_fix
 from silentsec.remediation.ai_fix import AIFixReport, AIFixStatus, ai_fix_and_verify
 from silentsec.remediation.verify import DEFAULT_REGRESSION_SEVERITY
+from silentsec.report import generate_report, load_fix_report
 from silentsec.scanners.results import ScannerStatus
 from silentsec.scanners.scanner_service import RepositoryScanResult, scan_repository
 from silentsec.schemas import Severity
@@ -167,6 +168,48 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Per-scanner timeout in seconds (default: 180).",
     )
     fix.add_argument(
+        "--timeout",
+        type=int,
+        default=180,
+        help="Per-scanner timeout in seconds (default: 180).",
+    )
+
+    report = subcommands.add_parser(
+        "report",
+        help="Write a self-contained HTML report (score, issues, history, fixes).",
+    )
+    report.add_argument("path", type=Path, help="Repository folder (never modified).")
+    report.add_argument(
+        "--out",
+        type=Path,
+        default=Path("silentsec-report.html"),
+        help="Where to write the report (default: silentsec-report.html).",
+    )
+    report.add_argument(
+        "--commits",
+        type=int,
+        default=10,
+        help="Commits to include in the history section (1-50, default: 10).",
+    )
+    report.add_argument(
+        "--no-history",
+        action="store_true",
+        help="Leave out the history section.",
+    )
+    report.add_argument(
+        "--fix-report",
+        dest="fix_reports",
+        type=Path,
+        action="append",
+        default=[],
+        help="JSON from 'silentsec verify --json' or 'silentsec fix --json' to include (repeatable).",
+    )
+    report.add_argument(
+        "--ai-triage",
+        action="store_true",
+        help="Include AI triage for top findings (needs API keys).",
+    )
+    report.add_argument(
         "--timeout",
         type=int,
         default=180,
@@ -492,6 +535,45 @@ def _run_history(args: argparse.Namespace, parser: argparse.ArgumentParser) -> i
     return EXIT_OK if all(point.complete for point in report.points) else EXIT_SCAN_INCOMPLETE
 
 
+def _run_report(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    if args.timeout <= 0 or not 1 <= args.commits <= 50:
+        parser.print_usage(sys.stderr)
+        print("silentsec: --commits must be 1-50 and --timeout positive.", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    if not args.path.is_dir():
+        print(f"silentsec: not a directory: {args.path}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    fixes = []
+    for path in args.fix_reports:
+        try:
+            fixes.append(load_fix_report(path))
+        except FileNotFoundError:
+            print(f"silentsec: fix report not found: {path}", file=sys.stderr)
+            return EXIT_USAGE_ERROR
+        except (OSError, TypeError, ValueError) as exc:
+            print(f"silentsec: {exc}", file=sys.stderr)
+            return EXIT_USAGE_ERROR
+
+    print("Scanning and building the report...", file=sys.stderr)
+    document, result, _ = generate_report(
+        args.path,
+        commits=args.commits,
+        include_history=not args.no_history,
+        fixes=fixes,
+        enable_ai_triage=args.ai_triage,
+        timeout_seconds=args.timeout,
+    )
+    args.out.write_text(document, encoding="utf-8")
+    print(f"Report written to {args.out.resolve()}")
+    print("Open it in a browser; it works offline and loads nothing from the internet.")
+
+    if result.status == ScannerStatus.SUCCESS and result.security_debt_complete:
+        return EXIT_OK
+    return EXIT_SCAN_INCOMPLETE
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -502,6 +584,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_fix(args, parser)
     if args.command == "history":
         return _run_history(args, parser)
+    if args.command == "report":
+        return _run_report(args, parser)
 
     if args.timeout <= 0 or args.max_ai_findings <= 0 or args.top < 0:
         parser.print_usage(sys.stderr)

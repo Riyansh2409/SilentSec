@@ -18,6 +18,7 @@ that accumulate hidden debt in AI-assisted codebases.
 - Fix + Verify: check a proposed patch in an isolated copy and report what it fixed and broke.
 - AI fix proposals: an AI provider suggests a fix, which is then verified the same way.
 - Time Machine: how security debt changed across recent commits, and which commit introduced or fixed each finding.
+- HTML report: one offline page with the score, issues and their evidence, history, and checked fixes.
 
 ## Installation
 
@@ -256,6 +257,37 @@ Biggest increase: df4edacf "Add settings" (+15.5)
   Incomplete scans are not stored.
 - Commits are followed along the first parent, so a merged branch counts as
   one step. In a shallow clone, older commits are missing; the output says so.
+
+## HTML Report
+
+`silentsec report` writes one self-contained HTML file you can open in any
+browser, share, or present:
+
+```powershell
+silentsec report path\to\repository --out report.html
+silentsec verify path\to\repository --patch fix.diff --json verify.json
+silentsec fix path\to\repository --json ai-fix.json
+silentsec report path\to\repository --out report.html --fix-report verify.json --fix-report ai-fix.json
+```
+
+The report shows:
+
+- a plain-language verdict and how the score is made up (security,
+  architecture, and the 100-point cap);
+- every issue, most serious first, with merged scanner reports, the redacted
+  code around it, how many points it adds, and AI triage when `--ai-triage`
+  is used;
+- recurring patterns;
+- the Time Machine chart and table for the last `--commits` commits (skip
+  with `--no-history`);
+- the result of each patch or AI fix passed with `--fix-report`.
+
+The file works offline and loads nothing from the internet. Everything taken
+from the repository (paths, messages, code, commit subjects) is HTML-escaped,
+and a Content-Security-Policy allows only the report's own small script, so a
+malicious repository cannot run code in the viewer's browser. Secret values and
+the code around secret findings are never included. It follows the system
+light or dark theme and prints cleanly.
 
 ## Planned Capabilities
 
