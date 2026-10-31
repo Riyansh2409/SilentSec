@@ -20,6 +20,7 @@ from silentsec.scanners.results import ScannerStatus
 from silentsec.scanners.scanner_service import RepositoryScanResult
 from silentsec.schemas import FindingCategory, Severity
 from silentsec.scoring.engine import MAX_REPOSITORY_SCORE
+from silentsec.triage.providers import is_local_provider
 
 SEVERITY_ORDER = [Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM, Severity.LOW, Severity.INFO]
 MAX_MESSAGE_CHARS = 600
@@ -357,8 +358,12 @@ def _findings(result: RepositoryScanResult, snippets: dict[str, str]) -> str:
         triage_html = ""
         if triage_item is not None:
             steps = "".join(f"<li>{_e(step)}</li>" for step in triage_item.remediation_steps)
+            label = result.triage_providers.get(finding.fingerprint)
+            by = ""
+            if label:
+                by = f" by {_e(label)}" + (", local" if is_local_provider(label) else "")
             triage_html = (
-                f'<p><b>AI triage</b> (suggested priority {_e(triage_item.priority.value)}, '
+                f'<p><b>AI triage</b>{by} (suggested priority {_e(triage_item.priority.value)}, '
                 f"needs human review): {_e(triage_item.summary)}</p>"
                 f'<ol class="plain">{steps}</ol>'
             )

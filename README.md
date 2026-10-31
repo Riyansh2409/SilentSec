@@ -42,7 +42,7 @@ variables in your shell) and fill in your own keys. Never commit real keys.
 How AI triage spends API quota:
 
 - Each finding goes to one provider at a time (Gemini primary, Gemini
-  fallback, then Groq). A timeout, connection error, or HTTP 408/429/5xx is
+  fallback, then Groq, or the `SILENTSEC_AI_PROVIDERS` order). A timeout, connection error, or HTTP 408/429/5xx is
   retried once on the same provider with backoff; authentication and request
   errors move straight to the next provider.
 - A scan makes at most `3 × --max-ai-findings` provider calls in total.
@@ -54,6 +54,41 @@ How AI triage spends API quota:
   holds triage text derived from your code; delete the folder to clear it.
 - If triage fails, findings and the score are unaffected; the report marks
   triage incomplete.
+
+### Local AI with Ollama
+
+[Ollama](https://ollama.com) runs the model on your own machine: no API key,
+and your code never leaves the laptop. It is used for both AI triage and
+`silentsec fix`.
+
+```powershell
+ollama pull qwen2.5-coder:7b
+$env:SILENTSEC_AI_PROVIDERS="ollama,groq"
+silentsec scan . --ai-triage
+```
+
+- The model needs about 5 GB of disk and runs best on a GPU with 6 GB or more
+  of memory; on a CPU it works but is slow.
+- `SILENTSEC_AI_PROVIDERS` is a comma list (`ollama`, `groq`, `gemini`) that
+  sets the order providers are tried in. Unknown names are an error. When it
+  is not set, the order stays Gemini primary, Gemini fallback, Groq (only those
+  with a key), and Ollama is not used. Listed cloud providers without a key
+  are skipped.
+- `OLLAMA_HOST` (default `http://localhost:11434`), `OLLAMA_MODEL` (default
+  `qwen2.5-coder:7b`) and `OLLAMA_TIMEOUT` (seconds, default 120) configure it.
+  Only this machine is allowed as host (`localhost`, `127.0.0.1`, `::1`);
+  another host would receive your code, so it is refused unless you set
+  `SILENTSEC_OLLAMA_ALLOW_REMOTE=1`. Proxy environment variables are ignored
+  for Ollama requests for the same reason.
+- If Ollama is not running, the scan says "Ollama is not running at ..." and
+  the next listed provider is used; the scan never fails because of it. A
+  model that is not pulled gives "Run: ollama pull <model>".
+- Local models are validated exactly like cloud ones. Smaller models sometimes
+  return the wrong JSON shape; such an answer is rejected and the next listed
+  provider is tried, so `ollama,groq` is a good combination.
+- `silentsec scan` shows which provider answered, e.g. `AI triage: 12
+  findings triaged (ollama qwen2.5-coder:7b: 12; ...)`, and the HTML report
+  marks Ollama results as "by ollama qwen2.5-coder:7b, local".
 
 ## Usage
 

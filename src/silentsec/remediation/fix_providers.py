@@ -7,6 +7,9 @@ verification all happen in SilentSec code, never in the model.
 import os
 from typing import Any, Protocol
 
+from silentsec.triage.ollama_provider import OllamaClient
+from silentsec.triage.providers import configured_provider_order
+
 FIX_SYSTEM_PROMPT = """
 You are SilentSec, an assistant that proposes minimal security fixes.
 
@@ -116,22 +119,53 @@ class GroqFixProvider:
         return content
 
 
-def build_default_fix_providers() -> list[FixProvider]:
-    """Configure fix providers from the same environment variables as triage."""
-    providers: list[FixProvider] = []
+class OllamaFixProvider:
+    """Ollama adapter for fix proposals; the model runs on this machine."""
 
+    def __init__(self, *, client: OllamaClient | None = None, **settings: Any):
+        self._client = client or OllamaClient(**settings)
+        self.model = self._client.model
+        self.name = f"ollama:{self.model}"
+
+    def complete(self, *, system: str, user: str) -> str:
+        return self._client.chat(system=system, user=user)
+
+
+def _gemini_fix_providers() -> list[FixProvider]:
     gemini_key = os.getenv("GEMINI_API_KEY")
-    if gemini_key:
-        primary = os.getenv("GEMINI_PRIMARY_MODEL", "gemini-3.6-flash").strip()
-        fallback = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash").strip()
-        if primary:
-            providers.append(GeminiFixProvider(api_key=gemini_key, model=primary))
-        if fallback and fallback != primary:
-            providers.append(GeminiFixProvider(api_key=gemini_key, model=fallback))
-
-    groq_key = os.getenv("GROQ_API_KEY")
-    if groq_key:
-        model = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b").strip() or "openai/gpt-oss-20b"
-        providers.append(GroqFixProvider(api_key=groq_key, model=model))
-
+    if not gemini_key:
+        return []
+    providers: list[FixProvider] = []
+    primary = os.getenv("GEMINI_PRIMARY_MODEL", "gemini-3.6-flash").strip()
+    fallback = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash").strip()
+    if primary:
+        providers.append(GeminiFixProvider(api_key=gemini_key, model=primary))
+    if fallback and fallback != primary:
+        providers.append(GeminiFixProvider(api_key=gemini_key, model=fallback))
     return providers
+
+
+def _groq_fix_providers() -> list[FixProvider]:
+    groq_key = os.getenv("GROQ_API_KEY")
+    if not groq_key:
+        return []
+    model = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b").strip() or "openai/gpt-oss-20b"
+    return [GroqFixProvider(api_key=groq_key, model=model)]
+
+
+_FIX_BUILDERS = {
+    "gemini": _gemini_fix_providers,
+    "groq": _groq_fix_providers,
+    "ollama": lambda: [OllamaFixProvider()],
+}
+
+
+def build_default_fix_providers() -> list[FixProvider]:
+    """Configure fix providers from the same environment variables as triage.
+
+    SILENTSEC_AI_PROVIDERS sets the order; without it, Gemini then Groq for
+    configured keys (Ollama only when listed). Raises AIProviderConfigError
+    for an unknown name or a disallowed OLLAMA_HOST.
+    """
+    order = configured_provider_order() or ("gemini", "groq")
+    return [provider for name in order for provider in _FIX_BUILDERS[name]()]

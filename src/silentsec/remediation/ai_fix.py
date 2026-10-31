@@ -25,6 +25,7 @@ from silentsec.remediation.fix_providers import (
 from silentsec.remediation.verify import FixVerificationReport, verify_fix
 from silentsec.scanners.scanner_service import RepositoryScanResult, scan_repository
 from silentsec.schemas import Finding, FindingCategory
+from silentsec.triage.providers import AIProviderConfigError, ProviderUnavailableError
 from silentsec.triage.router import TriageRouter
 from silentsec.triage.sanitization import prepare_finding_for_triage, redact_sensitive_text
 
@@ -275,7 +276,8 @@ def propose_fix(
                 errors.append(f"{provider.name}: declined to propose a fix ({answer.explanation[:200]}).")
                 continue
             diff_text = build_patch(window, answer.edits)
-        except FixProposalError as exc:
+        except (FixProposalError, ProviderUnavailableError) as exc:
+            # Both messages are written by SilentSec and safe to show.
             errors.append(f"{provider.name}: {exc}")
             continue
         except Exception as exc:  # noqa: BLE001
@@ -370,11 +372,19 @@ def ai_fix_and_verify(
             **details,
         )
 
-    selected = list(providers) if providers is not None else build_default_fix_providers()
+    try:
+        selected = list(providers) if providers is not None else build_default_fix_providers()
+    except AIProviderConfigError as exc:
+        return AIFixReport(status=AIFixStatus.NO_PROPOSAL, errors=[str(exc)], **details)
     if not selected:
         return AIFixReport(
             status=AIFixStatus.NO_PROPOSAL,
-            errors=["No AI provider is configured. Set GEMINI_API_KEY or GROQ_API_KEY."],
+            errors=[
+                (
+                    "No AI provider is configured. Set GEMINI_API_KEY or GROQ_API_KEY, "
+                    "or add ollama to SILENTSEC_AI_PROVIDERS."
+                )
+            ],
             **details,
         )
 

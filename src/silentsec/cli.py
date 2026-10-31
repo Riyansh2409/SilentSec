@@ -349,11 +349,16 @@ def format_summary(result: RepositoryScanResult, *, top: int = 10) -> str:
                 )
 
     if result.triage_attempted:
+        # Which provider answered, e.g. "ollama qwen2.5-coder:7b: 12; ".
+        answered: dict[str, int] = {}
+        for label in result.triage_providers.values():
+            answered[label] = answered.get(label, 0) + 1
+        by_provider = "".join(f"{label}: {count}; " for label, count in answered.items())
         lines += [
             "",
             (
                 f"AI triage: {len(result.triage_results)} findings triaged "
-                f"({result.triage_cache_hits} from cache, "
+                f"({by_provider}{result.triage_cache_hits} from cache, "
                 f"{result.triage_provider_calls} provider calls)"
             ),
         ]
