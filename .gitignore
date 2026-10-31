@@ -23,3 +23,9 @@ Thumbs.db
 
 # Generated Python packaging metadata
 *.egg-info/
+
+# Local frontend state and installed tools
+/frontend/.data/
+/frontend/.tools/
+/frontend/.cache/
+/frontend/.runtime/

@@ -1,0 +1,26 @@
+import assert from 'node:assert/strict';
+import {returnedCount,reintroducedChanges,scanIncomplete,findingTags,mergeInfo} from '../web/data.js';
+import {exposureOf,aiDisclosure,scoredView,nativeIssueView,triageAttributionText} from '../web/data.js';
+const point={introduced:[{reintroduced:true,previously_fixed_in:'abc'},{reintroduced:false}]};
+assert.equal(returnedCount([point]),1);
+assert.equal(reintroducedChanges(point)[0].previously_fixed_in,'abc');
+assert.equal(scanIncomplete({security_debt_complete:true,scanners:[{status:'success'},{status:'skipped'}]}),false);
+assert.equal(scanIncomplete({security_debt_complete:false}),true);
+assert.deepEqual(findingTags({tool:'osv-scanner'}),['Dependency']);
+assert.deepEqual(findingTags({rule_id:'SSEC-ARCH-006'}),['Hard to maintain']);
+assert.equal(mergeInfo({security_debt:{correlation_groups:[{representative:{fingerprint:'x'},findings:[{},{}],reason:'same_secret'}]}},{fingerprint:'x'}).count,2);
+const scored=scoredView({finding:{fingerprint:'x'},score:14.2,exposure:'reachable',exposure_path:['GET /search -> search()'],exposure_factor:1.25});
+assert.equal(scored._score,14.2);
+assert.equal(exposureOf(scored).state,'reachable');
+assert.equal(exposureOf(scored).factor,1.25);
+assert.deepEqual(exposureOf(nativeIssueView({sources:[],exposure:'reachable',exposure_path:['GET /search -> search()']})).path,['GET /search -> search()']);
+assert.equal(exposureOf({}).state,'unknown');
+assert.equal(exposureOf({exposure:'not_reachable'}).state,'not_reachable');
+assert.match(aiDisclosure({ai_configured:true,ai_local_only:false,ai_providers:[{name:'ollama',model:'local',scope:'local'},{name:'groq',model:'cloud',scope:'external'}]}),/including on fallback/);
+assert.match(aiDisclosure({ai_configured:true,ai_local_only:true,ai_providers:[{name:'ollama',model:'local',scope:'local'}]}),/Only local providers/);
+
+assert.equal(triageAttributionText({provider:'ollama',model:'qwen2.5-coder:7b',local:true,cached:true}),'Answered by: ollama / qwen2.5-coder:7b · local · cached result');
+assert.match(triageAttributionText({provider:'groq',model:'cloud',local:false,cached:false}),/external · fresh result/);
+assert.match(triageAttributionText({provider:null,model:null,local:false,cached:true}),/provider and model are unknown/);
+assert.equal(triageAttributionText('ollama legacy'),'Answered by: ollama legacy');
+assert.match(triageAttributionText(undefined),/not recorded/);
