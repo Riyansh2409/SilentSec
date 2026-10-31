@@ -171,6 +171,8 @@ button { font: inherit; color: var(--violet); background: var(--surface); border
 .chart .cap { stroke: var(--sev-info); stroke-dasharray: 4 4; }
 .chart .dot { fill: var(--surface); stroke: var(--blue); stroke-width: 2.5; }
 .chart .dot.peak { fill: var(--sev-critical); stroke: var(--sev-critical); }
+.chart .dot.incomplete { stroke: var(--sev-info); stroke-dasharray: 2 2; }
+.changes.incomplete { color: var(--sev-high); }
 .chart .label { fill: var(--ink); font-weight: 600; }
 .up { color: var(--sev-critical); }
 .down { color: var(--good); }
@@ -464,8 +466,9 @@ def _timeline_chart(report: TimelineReport) -> str:
     parts.append(f'<path class="line" d="{path}"/>')
     for index, point in enumerate(points):
         peak = biggest is not None and point.commit_sha == biggest.commit_sha
+        state = " peak" if peak else "" if point.complete else " incomplete"
         parts.append(
-            f'<circle class="dot{" peak" if peak else ""}" cx="{x(index):.1f}" '
+            f'<circle class="dot{state}" cx="{x(index):.1f}" '
             f'cy="{y(point.raw_score):.1f}" r="{6 if peak else 4.5}">'
             f"<title>{_e(point.short_sha)} {_e(point.subject)}: {point.raw_score:.1f}</title></circle>"
         )
@@ -514,6 +517,8 @@ def _timeline(report: TimelineReport | None, note: str | None) -> str:
     for point in report.points:
         if previous is None:
             change = '<span class="small">Baseline</span>'
+        elif not (previous.complete and point.complete):
+            change = '<span class="small" title="A scanner did not finish, so the change is unknown">?</span>'
         else:
             delta = point.raw_score - previous.raw_score
             css = "up" if delta > 0 else "down" if delta < 0 else ""
@@ -522,6 +527,9 @@ def _timeline(report: TimelineReport | None, note: str | None) -> str:
             changes = '<p class="small">Not attributed: a scan around this commit was incomplete.</p>'
         else:
             changes = _change_list(point.introduced, "Added") + _change_list(point.fixed, "Fixed")
+        if point.scanner_problems:
+            problems = "".join(f"<li>{_e(problem)}</li>" for problem in point.scanner_problems)
+            changes += f'<ul class="changes incomplete">{problems}</ul>'
         rows.append(
             "<tr>"
             f'<td class="loc">{_e(point.short_sha)}</td>'

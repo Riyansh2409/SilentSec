@@ -337,3 +337,22 @@ def test_report_on_a_real_git_repository_includes_history(tmp_path: Path):
     assert report is not None and len(report.points) == 1
     assert "Add loader" in document
     assert "SSEC-ARCH-002" in document
+
+
+def test_incomplete_history_points_show_unknown_change_and_reason():
+    report = timeline()
+    last = report.points[-1].model_copy(
+        update={
+            "complete": False,
+            "attribution": "unknown",
+            "scanner_problems": ["semgrep (partial): Timeout <b>x</b>"],
+        }
+    )
+    report = report.model_copy(update={"points": [report.points[0], last]})
+
+    document = render_report(scan_of([]), repo_name="demo", generated_at=NOW, timeline=report)
+
+    assert "semgrep (partial): Timeout &lt;b&gt;x&lt;/b&gt;" in document
+    assert 'class="dot incomplete"' in document
+    assert ">?</span>" in document
+    assert "+14.2" not in document

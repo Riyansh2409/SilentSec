@@ -69,6 +69,8 @@ class TimelinePoint(BaseModel):
     attribution: str = "known"
     introduced: list[FindingChange] = Field(default_factory=list)
     fixed: list[FindingChange] = Field(default_factory=list)
+    # Which scanner failed and why, for incomplete scans.
+    scanner_problems: list[str] = Field(default_factory=list)
 
 
 class TimelineReport(BaseModel):
@@ -82,9 +84,15 @@ class TimelineReport(BaseModel):
 
     @property
     def biggest_increase(self) -> TimelinePoint | None:
-        """The commit with the largest rise in uncapped score."""
+        """The commit with the largest rise in uncapped score.
+
+        Only steps between two complete scans count: a scanner failure can
+        make the score drop or jump without any change in the code.
+        """
         best: tuple[float, TimelinePoint] | None = None
         for previous, current in zip(self.points, self.points[1:], strict=False):
+            if not (previous.complete and current.complete):
+                continue
             delta = current.raw_score - previous.raw_score
             if delta > 0 and (best is None or delta > best[0]):
                 best = (delta, current)
@@ -165,6 +173,24 @@ def export_commit(repo: Path, sha: str, destination: Path) -> int:
     return skipped
 
 
+MAX_PROBLEM_CHARS = 200
+
+
+def _scanner_problems(result: RepositoryScanResult) -> list[str]:
+    """Describe each scanner that did not succeed, with its first error."""
+    problems: list[str] = []
+    for scanner in result.scanners:
+        if scanner.status in {ScannerStatus.SUCCESS, ScannerStatus.SKIPPED}:
+            continue
+        detail = next(
+            (error for error in scanner.errors if not error.startswith("Informational")),
+            "no error message was reported",
+        )
+        detail = redact_sensitive_text(" ".join(detail.split()))[:MAX_PROBLEM_CHARS]
+        problems.append(f"{scanner.scanner} ({scanner.status.value}): {detail}")
+    return problems
+
+
 def _to_stored(sha: str, committed_at: int, subject: str, result: RepositoryScanResult) -> StoredScan:
     debt = result.security_debt
     complete = bool(result.scanners) and all(
@@ -182,6 +208,7 @@ def _to_stored(sha: str, committed_at: int, subject: str, result: RepositoryScan
         unique_issues=debt.unique_open_findings_count if debt else 0,
         complete=complete,
         scanner_statuses={scanner.scanner: scanner.status.value for scanner in result.scanners},
+        scanner_problems=_scanner_problems(result),
         # Stored on disk, so messages are redacted once more as a safety net.
         findings=[
             finding.model_copy(update={"message": redact_sensitive_text(finding.message)})
@@ -288,6 +315,7 @@ def build_timeline(
             unique_issues=stored.unique_issues,
             complete=stored.complete,
             from_cache=from_cache,
+            scanner_problems=stored.scanner_problems,
         )
 
         if previous is None:
