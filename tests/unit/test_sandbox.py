@@ -33,7 +33,8 @@ def tree_digest(root: Path) -> str:
 
 def make_repo(root: Path) -> Path:
     root.mkdir()
-    (root / "app.py").write_text("import os\nos.system(cmd)\n", encoding="utf-8")
+    # LF on every OS, as git would check it out; write_text uses CRLF on Windows.
+    (root / "app.py").write_text("import os\nos.system(cmd)\n", encoding="utf-8", newline="\n")
     (root / "pkg").mkdir()
     (root / "pkg" / "util.py").write_text("x = 1\n", encoding="utf-8")
     for excluded in (".git", ".venv", "node_modules", "__pycache__"):
@@ -134,7 +135,9 @@ def test_crlf_patch_from_powershell_is_retried_with_lf(tmp_path: Path):
 
     assert result.ok, result.errors
     assert result.line_endings_normalized
-    assert b"\r\n" not in patched
+    # Which endings git writes depends on core.autocrlf (true by default on
+    # Windows), so compare the content only.
+    assert patched.replace(b"\r\n", b"\n") == b'import os\nprint("safe")\n'
 
 
 @requires_git
