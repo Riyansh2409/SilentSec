@@ -14,6 +14,14 @@ from silentsec.schemas import Finding, FindingCategory, Severity
 
 COMPLEXITY_LOW = 10
 COMPLEXITY_MEDIUM = 20
+# Radon maintainability index (0-100). Below 10 is Radon's rank C: a module
+# that is hard to maintain because of its size, complexity and lack of comments.
+MAINTAINABILITY_THRESHOLD = 10.0
+
+try:
+    from radon.metrics import mi_visit
+except ImportError:  # pragma: no cover - radon is a dependency, but be tolerant
+    mi_visit = None
 MAX_FILE_BYTES = 256 * 1024
 
 EXCLUDED_DIRECTORIES = {
@@ -79,6 +87,32 @@ def _read_python_file(path: Path, root: Path) -> str:
         raise _SkippedPythonFile("File appears to be binary")
 
     return content.decode("utf-8-sig")
+
+
+def _maintainability_finding(relative_path: str, source: str) -> Finding | None:
+    """SSEC-ARCH-006 when Radon rates the module hard to maintain."""
+    if mi_visit is None or not source.strip():
+        return None
+    try:
+        index = float(mi_visit(source, True))
+    except (SyntaxError, ValueError, ZeroDivisionError):
+        return None
+    if index >= MAINTAINABILITY_THRESHOLD:
+        return None
+    return _make_finding(
+        file_path=relative_path,
+        rule_id="SSEC-ARCH-006",
+        start_line=1,
+        end_line=max(1, source.count("\n")),
+        category=FindingCategory.MAINTAINABILITY,
+        severity=Severity.LOW,
+        message=(
+            f"Module has a maintainability index of {index:.1f} out of 100 (Radon rank C, "
+            f"below {MAINTAINABILITY_THRESHOLD:g}). The index combines size, complexity and "
+            "comment density; splitting the module usually raises it."
+        ),
+        confidence=0.8,
+    )
 
 
 def _make_finding(
@@ -490,6 +524,9 @@ def run_architecture_analyzer(
             continue
 
         parsed[relative_path] = tree
+        maintainability = _maintainability_finding(relative_path, source)
+        if maintainability is not None:
+            findings.append(maintainability)
 
         for node in ast.walk(tree):
             if isinstance(node, ast.ExceptHandler):
@@ -636,6 +673,12 @@ def run_architecture_analyzer(
         if errors or timed_out
         else ScannerStatus.SUCCESS
     )
+
+    if mi_visit is None:
+        errors.append(
+            "Informational: Radon is not installed, so the maintainability index "
+            "(SSEC-ARCH-006) was not checked."
+        )
 
     if skipped_oversized_files or skipped_binary_files:
         errors.append(

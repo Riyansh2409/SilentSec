@@ -153,7 +153,7 @@ def _remediation_effort(finding: Finding) -> RemediationEffort:
 
     if finding.category == FindingCategory.SECRET:
         return "medium"
-    if rule in {"ARCH-004", "SSEC-ARCH-004"}:
+    if rule in {"ARCH-004", "SSEC-ARCH-004", "SSEC-ARCH-006"}:
         return "high"
     if rule in {"ARCH-003", "SSEC-ARCH-003", "SSEC-ARCH-005"}:
         return "medium"

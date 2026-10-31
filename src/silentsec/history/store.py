@@ -19,7 +19,8 @@ from pydantic import BaseModel, Field
 from silentsec.schemas import Finding
 
 SCHEMA_VERSION = 1
-_RULES_DIR = Path(__file__).resolve().parent.parent / "rules"
+_PACKAGE_DIR = Path(__file__).resolve().parent.parent
+_RULES_DIR = _PACKAGE_DIR / "rules"
 
 
 class StoredScan(BaseModel):
@@ -48,10 +49,17 @@ def analysis_version() -> str:
         package_version = "unknown"
 
     digest = sha256(f"schema={SCHEMA_VERSION};silentsec={package_version}".encode())
-    for rule_file in sorted(_RULES_DIR.rglob("*")):
-        if rule_file.is_file():
-            digest.update(rule_file.relative_to(_RULES_DIR).as_posix().encode())
-            digest.update(rule_file.read_bytes())
+    # The bundled rules and the analysis code itself: a new analyzer rule or a
+    # change in how findings are merged and scored must not reuse old scans,
+    # even while the package version number stays the same during development.
+    roots = [(_RULES_DIR, "*"), (_PACKAGE_DIR, "*.py")]
+    for root, pattern in roots:
+        for path in sorted(root.rglob(pattern)):
+            if not path.is_file() or "__pycache__" in path.parts:
+                continue
+            digest.update(f"{root.name}/{path.relative_to(root).as_posix()}".encode())
+            # Normalize line endings so a Windows checkout gives the same value.
+            digest.update(path.read_bytes().replace(b"\r\n", b"\n"))
     return digest.hexdigest()[:16]
 
 
