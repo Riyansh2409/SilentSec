@@ -230,7 +230,11 @@ def run(operation: str, args: dict, directory: Path, data_root: Path) -> dict:
 
         return {
             "context": build_source_context(
-                args["repo_path"], Finding.model_validate(args["finding"])
+                args["repo_path"],
+                Finding.model_validate(args["finding"]),
+                secret_findings=[
+                    Finding.model_validate(item) for item in args.get("secret_findings", [])
+                ],
             )
         }
     actions = interfaces()

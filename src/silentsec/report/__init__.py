@@ -46,7 +46,7 @@ def _snippets(root: Path, scan: RepositoryScanResult) -> dict[str, str]:
         if finding.category == FindingCategory.SECRET:
             snippets[finding.fingerprint] = "Code withheld: this is a possible secret."
             continue
-        context = build_source_context(root, finding)
+        context = build_source_context(root, finding, secret_findings=scan.findings)
         if not context.startswith(UNAVAILABLE_PREFIX):
             snippets[finding.fingerprint] = context
     return snippets

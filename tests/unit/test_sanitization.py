@@ -104,3 +104,40 @@ def test_redacts_environment_variable_credentials():
 
     assert "example_aws_secret_value" not in result
     assert "db_password_value" not in result
+
+
+def test_python_expressions_are_not_redacted():
+    # Regression: `token=path.startswith(...)` was shown as `token=[REDACTED]`.
+    for code in (
+        'token=path.startswith("ghp")',
+        "secret = get_secret()",
+        "token = self.token",
+        'api_key = os.environ["API_KEY"]',
+        'auth_token=request.headers.get("Authorization")',
+        "password = password",
+        "github_token = settings.github_token",
+    ):
+        assert redact_sensitive_text(code) == code, code
+
+
+def test_literal_secret_values_are_still_redacted():
+    for text, value in (
+        ('password="hunter2"', "hunter2"),
+        ("api_key=f'abc{suffix}'", "abc{suffix}"),
+        ("TOKEN=abc123def456ghi789jkl", "abc123def456ghi789jkl"),
+        ("token=12345678", "12345678"),
+        ("PASSWORD=pa$$word!", "pa$$word!"),
+        ("AWS_SECRET_ACCESS_KEY=example_aws_secret_value", "example_aws_secret_value"),
+        ("GROQ_API_KEY=gsk_abcdefghij1234567890", "gsk_abcdefghij1234567890"),
+        ("DB_PASSWORD=hunter2!", "hunter2!"),
+    ):
+        result = redact_sensitive_text(text)
+        assert value not in result, text
+        assert "[REDACTED" in result, text
+
+
+def test_known_prefixes_are_redacted_anywhere():
+    text = "call(gsk_abcdefghijklmnopqrstuv123, AIzaSyA1234567890abcdefghij)"
+    result = redact_sensitive_text(text)
+    assert "gsk_" not in result
+    assert "AIza" not in result

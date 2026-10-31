@@ -1,6 +1,7 @@
 
 """Safely extract bounded source context for SilentSec AI triage."""
 
+from collections.abc import Iterable
 from pathlib import Path, PureWindowsPath
 
 from silentsec.schemas.finding import Finding, FindingCategory
@@ -10,6 +11,21 @@ DEFAULT_LINES_BEFORE = 8
 DEFAULT_LINES_AFTER = 8
 DEFAULT_MAX_FILE_BYTES = 256_000
 MAX_CONTEXT_LINES = 40
+WITHHELD_LINE = "[line withheld: possible secret]"
+
+
+def _secret_line_numbers(finding: Finding, secret_findings: Iterable[Finding]) -> set[int]:
+    """Lines in the same file that a secret scanner (e.g. Gitleaks) flagged."""
+    same_file = finding.file_path.replace("\\", "/")
+    lines: set[int] = set()
+    for secret in secret_findings:
+        if secret.category != FindingCategory.SECRET:
+            continue
+        if secret.file_path.replace("\\", "/") != same_file:
+            continue
+        end = max(secret.start_line, secret.end_line or secret.start_line)
+        lines.update(range(secret.start_line, min(end, secret.start_line + MAX_CONTEXT_LINES) + 1))
+    return lines
 
 
 def build_source_context(
@@ -19,8 +35,12 @@ def build_source_context(
     lines_before: int = DEFAULT_LINES_BEFORE,
     lines_after: int = DEFAULT_LINES_AFTER,
     max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
+    secret_findings: Iterable[Finding] = (),
 ) -> str:
     """Extract a small, sanitized source window for one finding.
+
+    Lines flagged by a secret finding in ``secret_findings`` (same file) are
+    replaced entirely, not just redacted.
 
     Only regular files resolved inside the repository are eligible.
     Errors return a safe explanation instead of aborting repository scans.
@@ -102,8 +122,9 @@ def build_source_context(
 
     extracted = source_lines[first_line - 1 : last_line]
 
+    withheld = _secret_line_numbers(finding, secret_findings)
     numbered_context = "\n".join(
-        f"{line_number}: {line}"
+        f"{line_number}: {WITHHELD_LINE if line_number in withheld else line}"
         for line_number, line in enumerate(extracted, start=first_line)
     )
 

@@ -518,7 +518,17 @@ class Handler(BaseHTTPRequestHandler):
                     raise InputError("Finding not present in this scan.")
                 result = self.state.invoke(
                     "context",
-                    {"repo_path": job["repo_path"], "finding": finding},
+                    {
+                        "repo_path": job["repo_path"],
+                        "finding": finding,
+                        # Lines flagged as secrets are withheld from the snippet.
+                        "secret_findings": [
+                            f
+                            for f in data["findings"]
+                            if f.get("category") == "secret"
+                            and f.get("file_path") == finding.get("file_path")
+                        ],
+                    },
                     self.state.data_root / "context" / uuid.uuid4().hex,
                     30,
                 )

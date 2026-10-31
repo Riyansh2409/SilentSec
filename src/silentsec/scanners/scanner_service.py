@@ -305,7 +305,7 @@ def scan_repository(
 
             for finding in selected_findings:
                 try:
-                    context = build_source_context(root, finding)
+                    context = build_source_context(root, finding, secret_findings=findings)
 
                     result = triage_engine.triage_finding(
                         finding,

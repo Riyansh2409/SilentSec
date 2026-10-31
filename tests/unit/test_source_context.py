@@ -173,3 +173,29 @@ def test_handles_none_end_line(tmp_path: Path):
     )
 
     assert "2: second = 2" in context
+
+def test_secret_flagged_lines_are_fully_withheld(tmp_path: Path):
+    source = tmp_path / "src" / "app.py"
+    source.parent.mkdir()
+    source.write_text(
+        'import os\n'
+        'password: hunter2\n'
+        'token=path.startswith("x")\n'
+        'eval(user_input)\n',
+        encoding="utf-8",
+    )
+    secret = make_finding(category=FindingCategory.SECRET, start_line=2, end_line=2)
+    other_file_secret = make_finding(
+        "src/other.py", category=FindingCategory.SECRET, start_line=3, end_line=3
+    )
+
+    context = build_source_context(
+        tmp_path,
+        make_finding(start_line=4, end_line=4),
+        secret_findings=[secret, other_file_secret],
+    )
+
+    assert "hunter2" not in context
+    assert "2: [line withheld: possible secret]" in context
+    assert '3: token=path.startswith("x")' in context
+    assert "4: eval(user_input)" in context
