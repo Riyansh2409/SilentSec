@@ -33,16 +33,16 @@ def tree_digest(root: Path) -> str:
 
 def make_repo(root: Path) -> Path:
     root.mkdir()
-    # LF on every OS, as git would check it out; write_text uses CRLF on Windows.
-    (root / "app.py").write_text("import os\nos.system(cmd)\n", encoding="utf-8", newline="\n")
+    # Bytes, not text: write_text would turn "\n" into CRLF on Windows only.
+    (root / "app.py").write_bytes(b"import os\nos.system(cmd)\n")
     (root / "pkg").mkdir()
-    (root / "pkg" / "util.py").write_text("x = 1\n", encoding="utf-8")
+    (root / "pkg" / "util.py").write_bytes(b"x = 1\n")
     for excluded in (".git", ".venv", "node_modules", "__pycache__"):
         (root / excluded).mkdir()
-        (root / excluded / "file.txt").write_text("excluded\n", encoding="utf-8")
-    (root / ".env").write_text("API_KEY=real-secret\n", encoding="utf-8")
-    (root / ".env.local").write_text("API_KEY=real-secret\n", encoding="utf-8")
-    (root / ".env.example").write_text("API_KEY=\n", encoding="utf-8")
+        (root / excluded / "file.txt").write_bytes(b"excluded\n")
+    (root / ".env").write_bytes(b"API_KEY=real-secret\n")
+    (root / ".env.local").write_bytes(b"API_KEY=real-secret\n")
+    (root / ".env.example").write_bytes(b"API_KEY=\n")
     return root
 
 
@@ -70,7 +70,7 @@ def test_copy_lives_outside_the_repository(tmp_path: Path):
 def test_symlinks_are_never_copied(tmp_path: Path):
     repo = make_repo(tmp_path / "repo")
     outside = tmp_path / "outside.txt"
-    outside.write_text("private\n", encoding="utf-8")
+    outside.write_bytes(b"private\n")
     (repo / "link.txt").symlink_to(outside)
     (repo / "linked_dir").symlink_to(tmp_path)
 
@@ -137,6 +137,22 @@ def test_crlf_patch_from_powershell_is_retried_with_lf(tmp_path: Path):
     assert result.line_endings_normalized
     # Which endings git writes depends on core.autocrlf (true by default on
     # Windows), so compare the content only.
+    assert patched.replace(b"\r\n", b"\n") == b'import os\nprint("safe")\n'
+
+
+@requires_git
+def test_lf_patch_applies_to_crlf_file(tmp_path: Path):
+    """A CRLF checkout (core.autocrlf=true) and an LF patch from 'git diff --output'."""
+    repo = make_repo(tmp_path / "repo")
+    (repo / "app.py").write_bytes(b"import os\r\nos.system(cmd)\r\n")
+
+    with create_isolated_copy(repo) as copy:
+        result = apply_patch(copy, FIX_PATCH)
+        patched = (copy.root / "app.py").read_bytes()
+
+    # git apply matches LF patch lines against CRLF lines itself; no retry needed.
+    assert result.ok, result.errors
+    assert not result.line_endings_normalized
     assert patched.replace(b"\r\n", b"\n") == b'import os\nprint("safe")\n'
 
 
