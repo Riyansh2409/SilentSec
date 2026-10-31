@@ -112,6 +112,7 @@ The architecture analyzer detects the following patterns in Python code:
 - **SSEC-ARCH-003:** High cyclomatic complexity in functions and methods. Low severity is reported above 10; medium severity above 20.
 - **SSEC-ARCH-004:** Circular imports, including supported relative imports.
 - **SSEC-ARCH-005:** Duplicated functions. Two functions match when their syntax trees are identical after ignoring local names, argument names, literal values, docstrings, type hints and decorators; attribute and keyword names still count. Functions under 5 statements or 6 lines are ignored. This finds copy-paste-and-rename clones, not near-duplicates whose structure differs.
+- **SSEC-ARCH-006:** Hard-to-maintain module, measured with [Radon](https://radon.readthedocs.io/)'s maintainability index (0-100), which combines size, cyclomatic complexity and comment density. Modules below 10 (Radon rank C) are reported once per file as low-severity maintainability debt with high fix effort. Cyclomatic complexity per function stays SSEC-ARCH-003.
 
 Analysis uses Python AST parsing and does not execute repository code. Oversized files and excluded directories are skipped. Syntax errors in individual files are reported without preventing analysis of other files.
 

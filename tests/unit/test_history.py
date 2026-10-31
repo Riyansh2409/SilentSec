@@ -19,13 +19,15 @@ from silentsec.scanners.scanner_service import scan_repository
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
 
 CLEAN = "def load(path):\n    with open(path) as handle:\n        return handle.read()\n"
-SWALLOWED = (
-    "def load(path):\n    try:\n        return open(path).read()\n    except Exception:\n        pass\n"
-)
+SWALLOWED = "def load(path):\n    try:\n        return open(path).read()\n    except Exception:\n        pass\n"
 
 
 def git(repo: Path, *args: str) -> str:
-    env = {**os.environ, "GIT_AUTHOR_DATE": "2026-10-01T10:00:00", "GIT_COMMITTER_DATE": "2026-10-01T10:00:00"}
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_DATE": "2026-10-01T10:00:00",
+        "GIT_COMMITTER_DATE": "2026-10-01T10:00:00",
+    }
     return subprocess.run(
         ["git", "-C", str(repo), "-c", "user.name=dev", "-c", "user.email=dev@example.com", *args],
         check=True,
@@ -106,7 +108,9 @@ def test_repository_and_git_directory_are_untouched(repo: Path, tmp_path: Path, 
 
     assert tree_digest(repo) == before
     # Uncommitted files are never part of the history.
-    assert all(point.unique_issues == 0 or point.subject == "Refactor loader" for point in report.points)
+    assert all(
+        point.unique_issues == 0 or point.subject == "Refactor loader" for point in report.points
+    )
 
 
 def test_second_run_reuses_stored_scans(repo: Path, tmp_path: Path):
@@ -123,7 +127,9 @@ def test_second_run_reuses_stored_scans(repo: Path, tmp_path: Path):
     ):
         first = build_timeline(repo, database=tmp_path / "h.db", scan=counting_scan)
         second = build_timeline(repo, database=tmp_path / "h.db", scan=counting_scan)
-        third = build_timeline(repo, database=tmp_path / "h.db", scan=counting_scan, use_cache=False)
+        third = build_timeline(
+            repo, database=tmp_path / "h.db", scan=counting_scan, use_cache=False
+        )
 
     assert len(calls) == 6  # 3 for the first run, 0 for the second, 3 for --no-cache
     assert not any(point.from_cache for point in first.points)
@@ -148,14 +154,19 @@ def test_incomplete_scans_are_marked_unknown_and_not_stored(repo: Path, tmp_path
     assert all(not point.complete for point in report.points)
     assert [point.attribution for point in report.points] == ["baseline", "unknown", "unknown"]
     assert all(point.introduced == [] for point in report.points)
-    assert HistoryStore(tmp_path / "h.db").get(report.points[0].commit_sha, analysis_version()) is None
+    assert (
+        HistoryStore(tmp_path / "h.db").get(report.points[0].commit_sha, analysis_version()) is None
+    )
     assert any("incomplete" in item for item in report.limitations)
 
 
 def test_commit_window_is_limited(repo: Path, tmp_path: Path, architecture_only):
     report = build_timeline(repo, commits=2, database=tmp_path / "h.db")
 
-    assert [point.subject for point in report.points] == ["Refactor loader", "Handle errors properly"]
+    assert [point.subject for point in report.points] == [
+        "Refactor loader",
+        "Handle errors properly",
+    ]
     assert report.points[0].attribution == "baseline"
 
     with pytest.raises(ValueError):
@@ -234,7 +245,7 @@ def test_cli_prints_timeline_table(repo: Path, tmp_path: Path, architecture_only
     assert code == cli.EXIT_OK
     assert "SilentSec Time Machine" in output
     assert "Refactor loader" in output
-    assert 'Biggest increase:' in output
+    assert "Biggest increase:" in output
     assert "SSEC-ARCH-002" in output
 
 
@@ -246,7 +257,9 @@ def test_progress_reports_cached_commits_separately(repo: Path, tmp_path: Path, 
     build_timeline(repo, database=tmp_path / "h.db", progress=lambda *a: second.append(a))
 
     assert [(index, total, cached) for index, total, _, cached in first] == [
-        (1, 3, False), (2, 3, False), (3, 3, False)
+        (1, 3, False),
+        (2, 3, False),
+        (3, 3, False),
     ]
     assert [(index, cached) for index, _, _, cached in second] == [(1, True), (2, True), (3, True)]
     assert all(len(sha) == 12 for _, _, sha, _ in second)
@@ -345,15 +358,41 @@ def test_biggest_increase_ignores_steps_next_to_incomplete_scans():
 
     def point(sha: str, raw: float, complete: bool = True) -> TimelinePoint:
         return TimelinePoint(
-            commit_sha=sha * 40, short_sha=sha * 8, committed_at="2026-10-01T00:00:00+00:00",
-            subject=sha, score=raw, raw_score=raw, security_points=raw, architecture_points=0,
-            unique_issues=1, complete=complete,
+            commit_sha=sha * 40,
+            short_sha=sha * 8,
+            committed_at="2026-10-01T00:00:00+00:00",
+            subject=sha,
+            score=raw,
+            raw_score=raw,
+            security_points=raw,
+            architecture_points=0,
+            unique_issues=1,
+            complete=complete,
         )
 
     report = TimelineReport(
-        repo_path="r", branch="main", analysis_version="v", database="d",
+        repo_path="r",
+        branch="main",
+        analysis_version="v",
+        database="d",
         points=[point("a", 10), point("b", 0, complete=False), point("c", 40), point("d", 45)],
     )
 
     # 0 -> 40 crosses an incomplete scan and is ignored; 40 -> 45 is the real rise.
     assert report.biggest_increase.subject == "d"
+
+
+def test_analysis_version_changes_with_analysis_code(tmp_path: Path, monkeypatch):
+    package = tmp_path / "silentsec"
+    (package / "scoring").mkdir(parents=True)
+    engine = package / "scoring" / "engine.py"
+    engine.write_text("POINTS = 1\n", encoding="utf-8")
+    monkeypatch.setattr(store_module, "_PACKAGE_DIR", package)
+    before = analysis_version()
+
+    engine.write_text("POINTS = 2\n", encoding="utf-8")
+    changed = analysis_version()
+    engine.write_bytes(b"POINTS = 2\r\n")  # a Windows checkout of the same code
+
+    assert changed != before
+    assert analysis_version() == changed
