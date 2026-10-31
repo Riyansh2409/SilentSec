@@ -1,4 +1,5 @@
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -158,6 +159,62 @@ def test_command_targets_repository_relative_path(tmp_path: Path, monkeypatch):
     assert captured["command"][-1] == "."
     assert captured["repo_path"] == tmp_path.resolve()
     assert "sample_repositories" not in captured["command"]
+
+
+def _captured_command(repo: Path, monkeypatch) -> list[str]:
+    captured: dict = {}
+
+    def fake_run_json_command(**kwargs):
+        captured.update(kwargs)
+        return semgrep_runner.ScannerRunResult(
+            scanner="semgrep",
+            status=ScannerStatus.SUCCESS,
+            duration_seconds=0,
+        )
+
+    monkeypatch.setattr(semgrep_runner, "run_json_command", fake_run_json_command)
+    run_semgrep(repo)
+    return captured["command"]
+
+
+def test_folder_without_git_is_its_own_project_root(tmp_path: Path, monkeypatch):
+    command = _captured_command(tmp_path, monkeypatch)
+
+    # Otherwise Semgrep uses a parent Git repository (e.g. a home folder) as
+    # the project root and walks all of it.
+    assert command[command.index("--project-root") + 1] == "."
+    assert command[-1] == "."
+
+
+def test_git_repository_keeps_default_project_root(tmp_path: Path, monkeypatch):
+    (tmp_path / ".git").mkdir()
+
+    assert "--project-root" not in _captured_command(tmp_path, monkeypatch)
+
+
+def test_git_worktree_or_submodule_keeps_default_project_root(tmp_path: Path, monkeypatch):
+    # In worktrees and submodules .git is a file pointing at the real git dir.
+    (tmp_path / ".git").write_text("gitdir: ../.git/worktrees/x\n", encoding="utf-8")
+
+    assert "--project-root" not in _captured_command(tmp_path, monkeypatch)
+
+
+@pytest.mark.skipif(
+    shutil.which("semgrep") is None or shutil.which("git") is None,
+    reason="semgrep or git not installed",
+)
+def test_real_semgrep_scans_folder_nested_in_git_repository(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv(SEMGREP_CONFIG_ENV, raising=False)
+    # Same layout as a history snapshot under a home folder that is a Git repo.
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    snapshot = tmp_path / "work" / "repo"
+    snapshot.mkdir(parents=True)
+    (snapshot / "app.py").write_text("eval(input())\n", encoding="utf-8")
+
+    result = run_semgrep(snapshot, timeout_seconds=120)
+
+    assert result.status == ScannerStatus.SUCCESS, result.errors
+    assert [finding.file_path for finding in result.findings] == ["app.py"]
 
 
 @pytest.mark.skipif(shutil.which("semgrep") is None, reason="semgrep not installed")

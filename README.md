@@ -92,6 +92,11 @@ execution hidden behind `__import__`, `importlib.import_module` or `getattr`
 (for example `__import__("os").system(cmd)`), which Bandit does not flag; this
 matters when verifying AI-proposed fixes.
 
+A folder without its own `.git` (history snapshots, verify/fix copies, or a
+subfolder such as `silentsec scan src`) is scanned by Semgrep as a standalone
+project: a parent repository's `.gitignore` is not applied, while the built-in
+excludes (`.venv`, `node_modules`, ...) and `.semgrepignore` still are.
+
 When different tools report the same issue, SilentSec merges them: matching CWE
 on overlapping lines across tools, and equivalent exception-handler rules
 (Bandit B110/B112, SSEC-ARCH-001/002) on the same handler.
@@ -301,7 +306,8 @@ light or dark theme and prints cleanly.
 GitHub Actions runs Ruff and the test suite on every push and pull request,
 plus a smoke job that installs the real scanners (Gitleaks pinned and
 checksum-verified), runs the real-scanner tests, and checks that a full scan
-completes without modifying the repository.
+completes without modifying the repository, including on a non-git copy nested
+inside the checkout (the layout history snapshots and verify copies use).
 
 ## Status
 

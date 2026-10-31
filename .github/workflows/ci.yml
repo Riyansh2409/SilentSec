@@ -81,3 +81,23 @@ jobs:
           grep -q "Security risk is" "$RUNNER_TEMP/report.html"
           git status --porcelain > "$RUNNER_TEMP/after.txt"
           diff "$RUNNER_TEMP/before.txt" "$RUNNER_TEMP/after.txt"
+
+      # History snapshots and verify/fix copies are folders without .git that
+      # can sit inside another Git repository (e.g. a home folder on Windows).
+      # Semgrep must still scan them; this also proves the installed Semgrep
+      # supports --project-root.
+      - name: Scan a non-git copy nested inside the Git checkout
+        run: |
+          semgrep --version
+          snapshot="ci-nested-snapshot"
+          mkdir "$snapshot"
+          git archive HEAD sample_repositories | tar -x -C "$snapshot"
+          test ! -e "$snapshot/.git"
+          silentsec scan "$snapshot/sample_repositories/semgrep_validation" --json "$RUNNER_TEMP/nested.json"
+          python - "$RUNNER_TEMP/nested.json" <<'EOF'
+          import json, sys
+          report = json.load(open(sys.argv[1], encoding="utf-8"))
+          rules = {finding["rule_id"] for finding in report["findings"]}
+          assert "silentsec.python.code-injection.eval-exec" in rules, sorted(rules)
+          EOF
+          rm -rf "$snapshot"

@@ -238,6 +238,57 @@ def test_cli_prints_timeline_table(repo: Path, tmp_path: Path, architecture_only
     assert "SSEC-ARCH-002" in output
 
 
+def test_progress_reports_cached_commits_separately(repo: Path, tmp_path: Path, architecture_only):
+    first: list[tuple] = []
+    second: list[tuple] = []
+
+    build_timeline(repo, database=tmp_path / "h.db", progress=lambda *a: first.append(a))
+    build_timeline(repo, database=tmp_path / "h.db", progress=lambda *a: second.append(a))
+
+    assert [(index, total, cached) for index, total, _, cached in first] == [
+        (1, 3, False), (2, 3, False), (3, 3, False)
+    ]
+    assert [(index, cached) for index, _, _, cached in second] == [(1, True), (2, True), (3, True)]
+    assert all(len(sha) == 12 for _, _, sha, _ in second)
+
+
+def test_cli_progress_says_stored_scan_for_cached_commits(
+    repo: Path, tmp_path: Path, architecture_only, capsys
+):
+    cli.main(["history", str(repo), "--db", str(tmp_path / "h.db")])
+    first = capsys.readouterr().err
+    cli.main(["history", str(repo), "--db", str(tmp_path / "h.db")])
+    second = capsys.readouterr().err
+
+    assert first.count("Scanning commit") == 3 and "Using stored scan" not in first
+    assert second.count("Using stored scan") == 3 and "Scanning commit" not in second
+    assert "Using stored scan 1/3 (" in second
+
+
+def test_cli_history_suggests_longer_timeout_after_scanner_timeout(
+    repo: Path, tmp_path: Path, capsys
+):
+    def timed_out(*args, **kwargs):
+        return ScannerRunResult(
+            scanner="semgrep",
+            status=ScannerStatus.FAILED,
+            duration_seconds=180,
+            errors=["Scanner timed out after 180 seconds."],
+        )
+
+    with (
+        patch("silentsec.scanners.scanner_service.run_semgrep", timed_out),
+        patch("silentsec.scanners.scanner_service.run_bandit", skipped("bandit")),
+        patch("silentsec.scanners.scanner_service.run_gitleaks", skipped("gitleaks")),
+    ):
+        code = cli.main(["history", str(repo), "--db", str(tmp_path / "h.db")])
+
+    output = capsys.readouterr().out
+    assert code == cli.EXIT_SCAN_INCOMPLETE
+    # One hint for the whole table, not one per failed commit.
+    assert output.count("Try --timeout 600 for large repositories.") == 1
+
+
 def test_cli_rejects_bad_options_and_non_repositories(tmp_path: Path, monkeypatch, capsys):
     plain = tmp_path / "plain"
     plain.mkdir()
@@ -285,6 +336,8 @@ def test_incomplete_commit_explains_which_scanner_failed_and_hides_fake_change(
     last_row = next(line for line in output.splitlines() if line.startswith(last.short_sha))
     assert " ? " in last_row and "[incomplete scan]" in last_row
     assert "! semgrep (partial): Timeout when running rules on app.py" in output
+    # A per-file rule timeout is not a whole-scanner timeout.
+    assert "Try --timeout" not in output
 
 
 def test_biggest_increase_ignores_steps_next_to_incomplete_scans():

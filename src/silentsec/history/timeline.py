@@ -236,9 +236,13 @@ def build_timeline(
     use_cache: bool = True,
     timeout_seconds: int = 180,
     scan: ScanFunction = scan_repository,
-    progress: Callable[[int, int, str], None] | None = None,
+    progress: Callable[[int, int, str, bool], None] | None = None,
 ) -> TimelineReport:
-    """Scan the last ``commits`` commits and attribute debt changes to them."""
+    """Scan the last ``commits`` commits and attribute debt changes to them.
+
+    ``progress`` is called once per commit with (index, total, short sha,
+    cached), where ``cached`` is True when a stored scan is reused.
+    """
     if not 1 <= commits <= MAX_COMMITS:
         raise ValueError(f"commits must be between 1 and {MAX_COMMITS}.")
 
@@ -276,10 +280,10 @@ def build_timeline(
     skipped_entries = 0
 
     for index, (sha, committed_at, subject) in enumerate(history, start=1):
-        if progress is not None:
-            progress(index, len(history), sha[:12])
-
         cached = store.get(sha, version) if use_cache else None
+        if progress is not None:
+            progress(index, len(history), sha[:12], cached is not None)
+
         if cached is not None:
             stored_scans.append((cached, True))
             continue
