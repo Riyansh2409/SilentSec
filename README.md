@@ -338,6 +338,8 @@ silentsec serve --cors-origin http://localhost:5173
 | GET | `/api/health` | - | version, and which of git/semgrep/bandit/gitleaks are installed |
 | POST | `/api/scan/github` | JSON `{"url": "https://github.com/owner/repo", "history_commits": 10}` | scan result |
 | POST | `/api/scan/upload` | multipart form, field `file` (a `.zip` or one source file, max 20 MB) | scan result |
+| POST | `/api/verify/github` | JSON `{"url": "...", "patch": "<unified diff>", "targets": null}` | Fix + Verify result |
+| POST | `/api/verify/upload` | multipart form, fields `file` (.zip or source file) and `patch` (diff file) | Fix + Verify result |
 | GET | `/api/scans` | - | recent scans, newest first |
 | GET | `/api/scans/{id}` | - | the full scan result again |
 | GET | `/api/scans/{id}/report` | - | the self-contained HTML report (can be shown in an iframe) |
@@ -349,6 +351,12 @@ and the surrounding code; code is withheld for possible secrets), `timeline`
 `{"detail": "..."}` with status 400 (bad input), 404, 413 (too large), 422
 (invalid request) or 429 (two scans already running). Full schemas are at
 `/docs`.
+
+A Fix + Verify result has `verdict` (`verified_fix`, `partial`, `unresolved`,
+`regression` or `not_verified`), `reasons`, the `targets`, `resolved`,
+`remaining` and `new` findings, and the score before and after. The patch is
+applied to a temporary copy only, and repository tests are never run through
+the API, because that would execute uploaded code.
 
 ```js
 const response = await fetch("http://127.0.0.1:8000/api/scan/github", {
