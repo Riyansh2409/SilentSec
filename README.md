@@ -132,17 +132,43 @@ Coupling-hotspot analysis and near-duplicate (similar but not identical) detecti
 
 ## Explainable Score
 
-SilentSec reports a deterministic security-debt score alongside a breakdown of its contributing components. Existing score, raw score, per-finding scores, and security risk calculations remain unchanged.
+SilentSec reports a deterministic security-debt score alongside a breakdown of its contributing components. Each finding scores its severity points times a confidence factor; security and secret findings reachable from a web route are then multiplied by an exposure factor (see Exposure).
 
 ### Score Components
 
 - **`security_severity`**: Points from security and secret findings using the existing severity and confidence formula.
+- **`exposure`**: Extra points for security and secret findings in a function that a web route reaches in the call graph (see Exposure below).
 - **`architectural_fragility`**: Architecture and maintainability debt points, capped at 25. Architecture risk is reported separately and does not raise the security risk level.
 - **`other_findings`**: Points from findings outside the security, secret, architecture, and maintainability categories.
 - **`score_cap_adjustment`**: An adjustment, when needed, that reconciles the component total with the existing repository score cap.
 - **`recurrence`**: Informational points based on recurring patterns spanning multiple files. Each additional file contributes 2 points, capped at 15. This component is informational and is not added to the repository score.
 
 The sum of non-informational score components equals the reported repository score. Informational recurrence points do not change the score or risk level.
+
+### Exposure
+
+A finding in code that a web request can reach counts more than the same
+finding in a helper nobody calls from outside. SilentSec parses the Python
+files (it never imports or runs them), takes Flask and FastAPI route handlers
+(`@app.route`, `@app.get/post/put/delete/patch`, `@router.*`, `@bp.route`,
+...) and `if __name__ == "__main__":` blocks as entry points, and follows
+calls by name (`f()`, `module.f()`, `self.f()`) between repository modules.
+
+- A security or secret finding inside a function reachable from an entry
+  point counts **x1.25**; the explanation shows the shortest path, e.g.
+  `Reachable from GET /search via search() -> search_products(): x1.25`.
+- Not reachable, outside any function, or no web framework detected: x1.00.
+  Architecture and maintainability findings are never adjusted.
+- Shown as `[reachable]` in `silentsec scan`, a "Reachable from the web" badge
+  with the path in the HTML report, `exposure`/`exposure_path` in the API and
+  JSON, and `properties.exposure` in SARIF.
+
+**Reachable in the call graph means a chain of calls exists in the code, not
+that the issue is proven exploitable.** Calls are linked by name, so when a
+name matches several functions all of them are linked (an over-approximation).
+Calls through variables, callbacks, `add_url_rule` and dependency injection
+are not followed. The analysis stops at 5000 functions, call chains of 8
+steps, and a time limit; anything it cannot decide is reported as unknown.
 
 ### Repository Size Awareness
 
@@ -468,6 +494,15 @@ silentsec history . --commits 10                        # "Add admin tools (AI-g
 silentsec verify . --patch ..\shop-patches\bad_fix.diff # REGRESSION
 silentsec report . --out ..\report.html
 ```
+
+What the tool outputs for this repository:
+
+| Command | Result |
+|---|---|
+| `scan` | Score 66.3, security risk CRITICAL, 6 unique issues; the SQL injection in `search_products()` is `[reachable]` from `GET /search` |
+| `gate` bad-fix / good-fix | FAIL (66.3 -> 66.3, 1 new issue) / PASS (66.3 -> 48.5) |
+| `verify` good_fix / bad_fix | VERIFIED FIX (66.3 -> 48.5) / REGRESSION (2 new `os.system` findings) |
+| `history` | 0.0 -> 24.2 -> 63.6 -> 66.3; biggest increase "Add admin tools (AI-generated)" (+39.4) |
 
 It also writes `C:\demo\shop.zip` (the `main` branch) and the two patches,
 which are the files to try with the API's upload and verify endpoints. The

@@ -142,6 +142,14 @@ class Issue(BaseModel):
     score_explanation: str
     sources: list[IssueSource]
     merge_reason: str | None = None
+    exposure: Literal["reachable", "not_reachable", "unknown"] = Field(
+        default="unknown",
+        description="'reachable' when a web route reaches the enclosing function in the "
+        "call graph. A call path exists in the code; it does not prove exploitability.",
+    )
+    exposure_path: list[str] = Field(
+        default_factory=list, description='Shortest call chain, e.g. ["GET /search -> search()"].'
+    )
     code: str | None = Field(
         default=None, description="Code around the issue; withheld for possible secrets."
     )
@@ -210,6 +218,8 @@ def _issues(result: RepositoryScanResult, snippets: dict[str, str]) -> list[Issu
                 score_explanation=item.explanation,
                 sources=[IssueSource(tool=tool, rule_id=rule) for tool, rule in sources],
                 merge_reason=group.reason if group is not None and len(members) > 1 else None,
+                exposure=item.exposure,
+                exposure_path=item.exposure_path,
                 code=snippets.get(finding.fingerprint),
             )
         )

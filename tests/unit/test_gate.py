@@ -207,7 +207,9 @@ def test_unknown_or_option_like_refs_are_rejected(repo: Path, bad_ref: str):
         run_gate(repo, base=bad_ref, head="feature", scan=fake_scan)
 
 
-def test_not_a_git_repository(tmp_path: Path):
+def test_not_a_git_repository(tmp_path: Path, monkeypatch):
+    # The temp folder may sit inside another repository (e.g. a home folder).
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
     with pytest.raises(HistoryError, match="Not a Git repository"):
         run_gate(tmp_path, scan=fake_scan)
 

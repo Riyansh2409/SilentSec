@@ -335,9 +335,11 @@ def format_summary(result: RepositoryScanResult, *, top: int = 10) -> str:
             lines += ["", f"Top findings (of {len(debt.scored_findings)}):"]
             for item in debt.scored_findings[:top]:
                 finding = item.finding
+                # Reachable from a web route in the call graph (not proof of exploitability).
+                reachable = "  [reachable]" if item.exposure == "reachable" else ""
                 lines.append(
                     f"  [{finding.severity.value.upper():<8}] {finding.file_path}:"
-                    f"{finding.start_line}  {finding.rule_id}"
+                    f"{finding.start_line}  {finding.rule_id}{reachable}"
                 )
 
         if debt.recurring_patterns:

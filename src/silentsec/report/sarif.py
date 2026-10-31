@@ -63,6 +63,8 @@ class _Issue:
         cwe_id: str | None = None,
         also_reported_by: Iterable[str] = (),
         points: float | None = None,
+        exposure: str | None = None,
+        exposure_path: Iterable[str] = (),
     ) -> None:
         self.tool = tool
         self.rule_id = rule_id
@@ -76,6 +78,8 @@ class _Issue:
         self.cwe_id = cwe_id
         self.also_reported_by = sorted(set(also_reported_by))
         self.points = points
+        self.exposure = exposure
+        self.exposure_path = list(exposure_path)
 
     @property
     def sarif_rule_id(self) -> str:
@@ -111,6 +115,12 @@ def _result(issue: _Issue, rule_index: int) -> dict[str, Any]:
     }
     if issue.points is not None:
         properties["silentsecPoints"] = round(issue.points, 1)
+    if issue.exposure is not None:
+        # "reachable": a web route reaches the function in the call graph; a
+        # call path in the code, not proof of exploitability.
+        properties["exposure"] = issue.exposure
+        if issue.exposure_path:
+            properties["exposurePath"] = issue.exposure_path
     return {
         "ruleId": issue.sarif_rule_id,
         "ruleIndex": rule_index,
@@ -195,6 +205,8 @@ def scan_to_sarif(result: RepositoryScanResult) -> dict[str, Any]:
                     cwe_id=finding.cwe_id,
                     also_reported_by=others,
                     points=item.score,
+                    exposure=item.exposure,
+                    exposure_path=item.exposure_path,
                 )
             )
     notes = [

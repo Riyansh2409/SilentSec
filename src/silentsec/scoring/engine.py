@@ -13,6 +13,7 @@ from silentsec.architecture.analyzer import (
     EXCLUDED_DIRECTORIES as ARCHITECTURE_EXCLUDED_DIRECTORIES,
 )
 from silentsec.architecture.analyzer import MAX_FILE_BYTES
+from silentsec.architecture.exposure import Exposure, ExposureAnalysis, analyze_exposure
 from silentsec.architecture.import_analyzer import analyze_python_imports
 from silentsec.languages.detector import EXTENSION_TO_LANGUAGE
 from silentsec.schemas.finding import Finding, FindingCategory, FindingStatus, Severity
@@ -33,6 +34,10 @@ ARCHITECTURE_DEBT_CAP = 25.0
 RECURRENCE_POINTS_PER_EXTRA_FILE = 2.0
 RECURRENCE_POINTS_CAP = 15.0
 MIN_LINES_FOR_DENSITY = 500
+# Security and secret findings in a function a web route reaches in the call
+# graph count 25% more. Never applied to architecture or maintainability.
+EXPOSURE_FACTOR = 1.25
+SECURITY_CATEGORIES = {FindingCategory.SECURITY, FindingCategory.SECRET}
 ARCHITECTURE_RISK_THRESHOLDS = {
     "low": 10.0,
     "moderate": 20.0,
@@ -68,6 +73,12 @@ class ScoredFinding(BaseModel):
     score: float = Field(ge=0.0)
     explanation: str
     remediation_effort: RemediationEffort = "low"
+    # Whether a web route reaches the enclosing function in the call graph.
+    # Only set for security and secret findings; "reachable" means a call path
+    # exists in the code, not that the issue is proven exploitable.
+    exposure: Exposure = "unknown"
+    exposure_path: list[str] = Field(default_factory=list)
+    exposure_factor: float = 1.0
 
 
 class SecurityDebtReport(BaseModel):
@@ -104,6 +115,7 @@ class SecurityDebtReport(BaseModel):
     analyzed_lines: int | None = Field(default=None, ge=0)
     debt_density_per_kloc: float | None = Field(default=None, ge=0.0)
     remediation_effort_summary: dict[str, int] = Field(default_factory=dict)
+    exposure_limitations: list[str] = Field(default_factory=list)
 
 
 def _effective_confidence(finding: Finding) -> float:
@@ -166,12 +178,43 @@ def _remediation_effort(finding: Finding) -> RemediationEffort:
     return "low"
 
 
-def _score_finding(finding: Finding) -> ScoredFinding:
-    """Calculate one finding's unchanged security-debt contribution."""
+def _exposure_of(
+    finding: Finding, analysis: ExposureAnalysis | None
+) -> tuple[Exposure, list[str]]:
+    if analysis is None or finding.category not in SECURITY_CATEGORIES:
+        return "unknown", []
+    function = analysis.function_at(finding.file_path, finding.start_line)
+    if function is None:
+        return "unknown", []
+    return function.exposure, function.path
+
+
+def _exposure_sentence(
+    exposure: Exposure, path: list[str], factor: float, points: float
+) -> str:
+    if exposure == "reachable" and path:
+        entry, _, first = path[0].partition(" -> ")
+        chain = " -> ".join([first, *(step.partition(" -> ")[2] for step in path[1:])])
+        return (
+            f" Reachable from {entry} via {chain}: x{factor:.2f} = {points:.3f} points "
+            "(a call path exists in the code; this does not prove the issue is exploitable)."
+        )
+    if exposure == "not_reachable":
+        return " Not reachable from a detected web route in the call graph: x1.00."
+    return ""
+
+
+def _score_finding(
+    finding: Finding, analysis: ExposureAnalysis | None = None
+) -> ScoredFinding:
+    """Calculate one finding's security-debt contribution."""
     base_points = BASE_POINTS[finding.severity]
     confidence = _effective_confidence(finding)
     confidence_factor = 0.5 + (0.5 * confidence)
-    points = round(base_points * confidence_factor, 3)
+    exposure, exposure_path = _exposure_of(finding, analysis)
+    exposure_factor = EXPOSURE_FACTOR if exposure == "reachable" else 1.0
+    before_exposure = round(base_points * confidence_factor, 3)
+    points = round(base_points * confidence_factor * exposure_factor, 3)
     confidence_source = (
         "reported" if finding.confidence is not None else "defaulted"
     )
@@ -179,7 +222,8 @@ def _score_finding(finding: Finding) -> ScoredFinding:
         f"{finding.severity.value.title()} severity contributes "
         f"{base_points} base points; {confidence_source} confidence "
         f"{confidence:.2f} applies a {confidence_factor:.3f} factor, "
-        f"for {points:.3f} points."
+        f"for {before_exposure:.3f} points."
+        + _exposure_sentence(exposure, exposure_path, exposure_factor, points)
     )
     return ScoredFinding(
         finding=finding,
@@ -188,6 +232,9 @@ def _score_finding(finding: Finding) -> ScoredFinding:
         score=points,
         explanation=explanation,
         remediation_effort=_remediation_effort(finding),
+        exposure=exposure,
+        exposure_path=exposure_path,
+        exposure_factor=exposure_factor,
     )
 
 
@@ -238,6 +285,7 @@ def score_findings(
     suppressed_count = sum(f.status == FindingStatus.SUPPRESSED for f in items)
     open_findings = [f for f in items if f.status == FindingStatus.OPEN]
 
+    exposure_analysis: ExposureAnalysis | None = None
     if repo_root is not None:
         import_analysis = analyze_python_imports(repo_root)
         correlation_groups = correlate_findings(
@@ -245,11 +293,14 @@ def score_findings(
             dependencies=import_analysis.dependencies,
             repo_root=repo_root,
         )
+        if any(group.representative.category in SECURITY_CATEGORIES for group in correlation_groups):
+            exposure_analysis = analyze_exposure(repo_root)
     else:
         correlation_groups = correlate_findings(open_findings)
 
     scored_findings = [
-        _score_finding(group.representative) for group in correlation_groups
+        _score_finding(group.representative, exposure_analysis)
+        for group in correlation_groups
     ]
     scored_findings.sort(
         key=lambda item: (
@@ -266,7 +317,7 @@ def score_findings(
         FindingCategory.ARCHITECTURE,
         FindingCategory.MAINTAINABILITY,
     }
-    security_categories = {FindingCategory.SECURITY, FindingCategory.SECRET}
+    security_categories = SECURITY_CATEGORIES
 
     architecture_raw_points = round(
         sum(
@@ -287,6 +338,17 @@ def score_findings(
         ),
         3,
     )
+    # The part of security_points that comes from the exposure factor.
+    security_before_exposure = round(
+        sum(
+            round(item.base_points * (0.5 + 0.5 * item.effective_confidence), 3)
+            for item in scored_findings
+            if item.finding.category in security_categories
+        ),
+        3,
+    )
+    exposure_points = round(security_points - security_before_exposure, 3)
+    reachable_count = sum(item.exposure == "reachable" for item in scored_findings)
     other_points = round(
         sum(
             item.score
@@ -338,9 +400,20 @@ def score_findings(
     components = [
         ScoreComponent(
             name="security_severity",
-            points=security_points,
+            points=security_before_exposure,
             max_points=MAX_REPOSITORY_SCORE,
             explanation="Existing security and secret finding contributions.",
+        ),
+        ScoreComponent(
+            name="exposure",
+            points=exposure_points,
+            max_points=MAX_REPOSITORY_SCORE,
+            explanation=(
+                f"{reachable_count} security or secret finding(s) sit in functions "
+                f"reachable from a web route in the call graph; each counts "
+                f"x{EXPOSURE_FACTOR:.2f}. A call path in the code is not proof "
+                "that an issue is exploitable."
+            ),
         ),
         ScoreComponent(
             name="architectural_fragility",
@@ -454,4 +527,5 @@ def score_findings(
         analyzed_lines=analyzed_lines,
         debt_density_per_kloc=debt_density,
         remediation_effort_summary=effort_summary,
+        exposure_limitations=exposure_analysis.limitations if exposure_analysis else [],
     )
