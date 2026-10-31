@@ -556,6 +556,16 @@ def format_timeline(report: TimelineReport) -> str:
     if any(_is_timeout(problem) for point in report.points for problem in point.scanner_problems):
         lines.append(TIMEOUT_HINT)
 
+    came_back = report.reintroduced
+    if came_back:
+        lines += ["", f"Came back after a fix ({len(came_back)}):"]
+        for point, change in came_back[:10]:
+            lines.append(
+                f"  ! [{change.severity.value.upper():<8}] {change.file_path}:{change.start_line}"
+                f"  {change.tool} {change.rule_id}  (fixed in {change.previously_fixed_in}, "
+                f"back in {point.short_sha})"
+            )
+
     peak = report.biggest_increase
     if peak is not None:
         index = report.points.index(peak)
