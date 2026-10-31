@@ -340,6 +340,53 @@ are exported with `git archive` into temporary folders; the repository and
 its working tree are not modified, and uncommitted changes are ignored. The
 exit codes make it usable as a CI step.
 
+## GitHub Action and SARIF
+
+`scan` and `gate` can write [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html),
+the format GitHub code scanning reads:
+
+```bash
+silentsec scan . --sarif silentsec.sarif        # one result per unique issue
+silentsec gate . --base main --sarif gate.sarif # only what the change introduces
+```
+
+Results carry a stable `partialFingerprints` value, `security-severity` for
+security and secret findings, CWE tags, and "Also reported by ..." when
+several scanners found the same issue. An incomplete scan sets
+`executionSuccessful: false`.
+
+This repository is also a GitHub Action that runs the gate on pull requests:
+
+```yaml
+# .github/workflows/silentsec.yml in the repository to protect
+on: pull_request
+permissions:
+  contents: read
+  security-events: write   # only needed for the upload step
+jobs:
+  silentsec:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0       # the gate needs the merge base
+      - uses: Riyansh2409/SilentSec@main
+        with:
+          fail-on: high        # critical, high, medium, low or info
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: silentsec-gate.sarif
+```
+
+The action installs SilentSec, Semgrep, Bandit and a pinned, checksum-verified
+Gitleaks, runs `silentsec gate` against the pull request's base branch, writes
+a job summary (blocking findings, warnings, resolved findings) and fails the
+job when the gate fails. Inputs are passed to the script through environment
+variables, so branch names cannot inject shell commands, and repository text
+is escaped in the summary. Pin the action to a commit SHA instead of `@main`
+for production use.
+
 ## HTTP API (for a web frontend)
 
 `silentsec serve` starts an HTTP API so a web page can scan a public GitHub

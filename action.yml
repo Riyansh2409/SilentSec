@@ -1,0 +1,108 @@
+name: SilentSec security gate
+description: >-
+  Fail a pull request that adds new security debt. Scans the base and the head
+  of the change, ignores existing debt, writes a job summary and a SARIF file.
+author: SilentSec team
+branding:
+  icon: shield
+  color: purple
+
+inputs:
+  base:
+    description: Branch or commit to compare against. Default is the pull request's base branch, else main.
+    default: ""
+  head:
+    description: Commit to check.
+    default: HEAD
+  fail-on:
+    description: Lowest severity of a NEW security finding that fails the gate (critical, high, medium, low, info).
+    default: high
+  fail-on-architecture:
+    description: Also fail on new architecture/maintainability findings ("true" or "false").
+    default: "false"
+  path:
+    description: Repository folder to check.
+    default: "."
+  sarif-file:
+    description: Where to write the SARIF file with the findings this change introduces.
+    default: silentsec-gate.sarif
+  timeout:
+    description: Per-scanner timeout in seconds.
+    default: "180"
+  python-version:
+    description: Python version used to run SilentSec.
+    default: "3.11"
+
+outputs:
+  verdict:
+    description: pass, fail or incomplete.
+    value: ${{ steps.gate.outputs.verdict }}
+  sarif-file:
+    description: Path of the SARIF file.
+    value: ${{ inputs.sarif-file }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install SilentSec and scanners
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        GITLEAKS_VERSION: "8.21.2"
+        GITLEAKS_SHA256: "5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba"
+      run: |
+        python -m pip install --quiet "${ACTION_PATH}[scanners]"
+        archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+        curl -sSfL -o "$RUNNER_TEMP/$archive" \
+          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
+        echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/$archive" | sha256sum --check --quiet
+        tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
+        sudo install -m 0755 "$RUNNER_TEMP/gitleaks" /usr/local/bin/gitleaks
+
+    - name: Run the gate
+      id: gate
+      shell: bash
+      # Inputs are passed through environment variables, never pasted into the
+      # script, so a branch name cannot inject shell commands.
+      env:
+        INPUT_BASE: ${{ inputs.base }}
+        INPUT_HEAD: ${{ inputs.head }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_FAIL_ON_ARCHITECTURE: ${{ inputs.fail-on-architecture }}
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_SARIF: ${{ inputs.sarif-file }}
+        INPUT_TIMEOUT: ${{ inputs.timeout }}
+        PR_BASE: ${{ github.base_ref }}
+      run: |
+        base="${INPUT_BASE:-${PR_BASE:-main}}"
+        if ! git -C "$INPUT_PATH" rev-parse --verify --quiet "${base}^{commit}" >/dev/null; then
+          git -C "$INPUT_PATH" fetch --no-tags --quiet origin "$base"
+          base="origin/${base}"
+        fi
+        if git -C "$INPUT_PATH" rev-parse --is-shallow-repository | grep -q true; then
+          echo "::warning::Shallow checkout: use actions/checkout with fetch-depth: 0 so the merge base can be found."
+        fi
+        args=(--base "$base" --head "$INPUT_HEAD" --fail-on "$INPUT_FAIL_ON"
+              --timeout "$INPUT_TIMEOUT" --sarif "$INPUT_SARIF" --json "$RUNNER_TEMP/silentsec-gate.json")
+        if [ "$INPUT_FAIL_ON_ARCHITECTURE" = "true" ]; then
+          args+=(--fail-on-architecture)
+        fi
+        set +e
+        silentsec gate "$INPUT_PATH" "${args[@]}"
+        code=$?
+        set -e
+        if [ -f "$RUNNER_TEMP/silentsec-gate.json" ]; then
+          python "$GITHUB_ACTION_PATH/scripts/gate_summary.py" "$RUNNER_TEMP/silentsec-gate.json" \
+            >> "$GITHUB_STEP_SUMMARY"
+          verdict=$(python -c "import json,sys; print(json.load(open(sys.argv[1]))['verdict'])" \
+            "$RUNNER_TEMP/silentsec-gate.json")
+        else
+          verdict=error
+        fi
+        echo "verdict=${verdict}" >> "$GITHUB_OUTPUT"
+        exit "$code"

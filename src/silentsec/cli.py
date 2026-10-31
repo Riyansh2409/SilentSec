@@ -1,6 +1,7 @@
 """Command-line entry point: ``silentsec scan`` and ``silentsec verify``."""
 
 import argparse
+import json
 import os
 import shlex
 import sys
@@ -13,6 +14,7 @@ from silentsec.remediation import FindingSummary, FixVerdict, FixVerificationRep
 from silentsec.remediation.ai_fix import AIFixReport, AIFixStatus, ai_fix_and_verify
 from silentsec.remediation.verify import DEFAULT_REGRESSION_SEVERITY
 from silentsec.report import generate_report, load_fix_report
+from silentsec.report.sarif import gate_to_sarif, scan_to_sarif
 from silentsec.scanners.results import ScannerStatus
 from silentsec.scanners.scanner_service import RepositoryScanResult, scan_repository
 from silentsec.schemas import Severity
@@ -39,6 +41,12 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="json_path",
         type=Path,
         help="Also write the full report as JSON to this file.",
+    )
+    scan.add_argument(
+        "--sarif",
+        dest="sarif_path",
+        type=Path,
+        help="Write unique issues as SARIF 2.1.0 (for GitHub code scanning).",
     )
     scan.add_argument(
         "--ai-triage",
@@ -238,6 +246,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Also fail on new architecture/maintainability findings (default: warn only).",
     )
     gate.add_argument("--json", dest="json_path", type=Path, help="Write the gate result as JSON.")
+    gate.add_argument(
+        "--sarif",
+        dest="sarif_path",
+        type=Path,
+        help="Write the findings this change introduces as SARIF 2.1.0.",
+    )
     gate.add_argument(
         "--timeout",
         type=int,
@@ -736,12 +750,19 @@ def _run_gate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.json_path is not None:
         args.json_path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
         print(f"\nJSON result written to {args.json_path}")
+    if args.sarif_path is not None:
+        _write_sarif(args.sarif_path, gate_to_sarif(report))
 
     if report.verdict == GateVerdict.PASS:
         return EXIT_OK
     if report.verdict == GateVerdict.FAIL:
         return EXIT_GATE_FAILED
     return EXIT_GATE_INCOMPLETE
+
+
+def _write_sarif(path: Path, document: dict) -> None:
+    path.write_text(json.dumps(document, indent=2), encoding="utf-8")
+    print(f"SARIF written to {path}")
 
 
 def _run_serve(args: argparse.Namespace) -> int:
@@ -813,6 +834,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.json_path is not None:
         args.json_path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
         print(f"\nJSON report written to {args.json_path}")
+    if args.sarif_path is not None:
+        _write_sarif(args.sarif_path, scan_to_sarif(result))
 
     if result.status == ScannerStatus.SUCCESS and result.security_debt_complete:
         return EXIT_OK
