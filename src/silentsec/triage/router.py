@@ -22,7 +22,7 @@ from pydantic import ValidationError
 from silentsec.schemas.finding import Finding
 
 from .cache import TriageCache, cache_key
-from .providers import TriageProvider
+from .providers import ProviderUnavailableError, TriageProvider
 from .sanitization import (
     prepare_context_for_triage,
     prepare_finding_for_triage,
@@ -79,6 +79,16 @@ class TriageRouter:
         self._cache = cache
         self._sleep = sleep
         self.provider_calls = 0
+        # "<name> <model>" of the provider that answered the last triage call;
+        # None when the result came from the cache.
+        self.last_provider: str | None = None
+        # First "cannot be reached" message per provider, safe to show users.
+        self.provider_notes: dict[str, str] = {}
+
+    @staticmethod
+    def _label(name: str, provider: TriageProvider) -> str:
+        model = getattr(provider, "model", "") or ""
+        return f"{name} {model}".strip()
 
     @property
     def provider_signature(self) -> str:
@@ -101,6 +111,7 @@ class TriageRouter:
 
         safe_finding = prepare_finding_for_triage(finding)
         safe_context = prepare_context_for_triage(finding, context)
+        self.last_provider = None
 
         key: str | None = None
         if self._cache is not None:
@@ -148,6 +159,8 @@ class TriageRouter:
                         continue
 
                     failures.append((name, exc))
+                    if isinstance(exc, ProviderUnavailableError):
+                        self.provider_notes.setdefault(name, str(exc))
                     logger.warning(
                         "Triage provider %s failed with %s; trying the next provider.",
                         name,
@@ -156,6 +169,7 @@ class TriageRouter:
                     break
 
                 logger.info("Triage completed using provider %s", name)
+                self.last_provider = self._label(name, provider)
 
                 if self._cache is not None and key is not None:
                     self._cache.put(key, result)
@@ -204,6 +218,8 @@ class TriageRouter:
     @classmethod
     def _is_transient(cls, exc: Exception) -> bool:
         """Failures worth retrying on the SAME provider."""
+        if isinstance(exc, ProviderUnavailableError):
+            return False  # e.g. Ollama not running: go straight to the next provider
         if isinstance(exc, (TimeoutError, ConnectionError)):
             return True
         return cls._status_code(exc) in RETRYABLE_STATUS_CODES

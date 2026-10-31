@@ -16,6 +16,7 @@ from silentsec.triage import (
     TriageResult,
     build_default_router,
 )
+from silentsec.triage.providers import AIProviderConfigError
 from silentsec.triage.router import TriageBudgetExceededError
 from silentsec.verification import (
     VerificationHistory,
@@ -71,6 +72,8 @@ class RepositoryScanResult(BaseModel):
     triage_attempted: bool = False
     triage_complete: bool = False
     triage_errors: list[str] = Field(default_factory=list)
+    # Finding fingerprint -> "<provider> <model>" that answered (cache hits omitted).
+    triage_providers: dict[str, str] = Field(default_factory=dict)
     triage_cache_hits: int = Field(default=0, ge=0)
     triage_provider_calls: int = Field(default=0, ge=0)
     verification_report: VerificationReport | None = None
@@ -237,6 +240,7 @@ def scan_repository(
 
     triage_results: list[TriageResult] = []
     triage_errors: list[str] = []
+    triage_providers: dict[str, str] = {}
     triage_cache_hits = 0
     triage_provider_calls = 0
     triage_attempted = enable_ai_triage
@@ -250,13 +254,19 @@ def scan_repository(
             if not use_triage_cache:
                 router_options["cache"] = None
             router = build_default_router(**router_options)
+        except AIProviderConfigError as exc:
+            router = None
+            triage_errors.append(f"Could not initialize AI triage: {exc}")
         except Exception as exc:  # noqa: BLE001
             router = None
             triage_errors.append(f"Could not initialize AI triage ({type(exc).__name__}).")
 
         if router is None:
             if not triage_errors:
-                triage_errors.append("AI triage requested, but no provider API key is configured.")
+                triage_errors.append(
+                    "AI triage requested, but no provider is configured. Set GEMINI_API_KEY "
+                    "or GROQ_API_KEY, or add ollama to SILENTSEC_AI_PROVIDERS."
+                )
 
         elif not findings:
             # No findings means there was nothing to send to an AI provider.
@@ -298,6 +308,9 @@ def scan_repository(
                         context=context,
                     )
                     triage_results.append(result)
+                    answered_by = getattr(router, "last_provider", None)
+                    if isinstance(answered_by, str):
+                        triage_providers[finding.fingerprint] = answered_by
 
                 except TriageBudgetExceededError:
                     triage_errors.append(
@@ -312,6 +325,12 @@ def scan_repository(
                     )
 
             triage_complete = len(triage_results) == len(findings) and not triage_errors
+            # E.g. "Ollama is not running at ...": shown even when a later
+            # provider answered, so the user knows Ollama was skipped.
+            # First, because the CLI shows only the first few errors.
+            notes = getattr(router, "provider_notes", {})
+            if isinstance(notes, dict):
+                triage_errors[:0] = [str(note) for note in notes.values()]
 
             cache = getattr(router, "cache", None)
             triage_cache_hits = getattr(cache, "hits", 0) if cache is not None else 0
@@ -331,6 +350,7 @@ def scan_repository(
         triage_attempted=triage_attempted,
         triage_complete=triage_complete,
         triage_errors=triage_errors,
+        triage_providers=triage_providers,
         triage_cache_hits=triage_cache_hits if isinstance(triage_cache_hits, int) else 0,
         triage_provider_calls=(
             triage_provider_calls if isinstance(triage_provider_calls, int) else 0
