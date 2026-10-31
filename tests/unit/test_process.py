@@ -3,6 +3,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -28,7 +30,11 @@ def _alive(pid: int) -> bool:
         return str(pid) in listing
     status = Path(f"/proc/{pid}/status")
     if status.exists():  # Linux: a killed but not yet reaped process is a zombie
-        return "\nState:\tZ" not in status.read_text()
+        try:
+            return "\nState:\tZ" not in status.read_text()
+        except FileNotFoundError:
+            # The process may be reaped between exists() and read_text().
+            return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -84,3 +90,31 @@ def test_timeout_kills_the_whole_process_tree(tmp_path: Path):
     while _alive(grandchild) and time.monotonic() < deadline:
         time.sleep(0.2)
     assert not _alive(grandchild), "the grandchild process survived the timeout"
+
+
+@pytest.mark.parametrize(
+    ("contents", "expected"),
+    [
+        ("Name:\tpython\nState:\tS (sleeping)\n", True),
+        ("Name:\tpython\nState:\tZ (zombie)\n", False),
+        (FileNotFoundError("process was reaped"), False),
+    ],
+    ids=["running", "zombie", "reaped-during-status-read"],
+)
+def test_alive_handles_linux_process_states(monkeypatch, contents, expected):
+    module = sys.modules[__name__]
+    status = Mock()
+    status.exists.return_value = True
+    if isinstance(contents, Exception):
+        status.read_text.side_effect = contents
+    else:
+        status.read_text.return_value = contents
+    path = Mock(return_value=status)
+    kill = Mock()
+    # Exercise the Linux probe on all platforms without changing global os.name.
+    monkeypatch.setattr(module, "os", SimpleNamespace(name="posix", kill=kill))
+    monkeypatch.setattr(module, "Path", path)
+
+    assert _alive(123) is expected
+    path.assert_called_once_with("/proc/123/status")
+    kill.assert_not_called()
