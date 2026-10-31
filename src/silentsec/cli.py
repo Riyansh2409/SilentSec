@@ -351,9 +351,11 @@ def format_summary(result: RepositoryScanResult, *, top: int = 10) -> str:
                 )
 
     if result.triage_attempted:
-        # Which provider answered, e.g. "ollama qwen2.5-coder:7b: 12; ".
+        # Which provider answered, e.g. "ollama qwen2.5-coder:7b: 12; ", also
+        # for cache hits; older cache entries do not record their provider.
         answered: dict[str, int] = {}
-        for label in result.triage_providers.values():
+        for attribution in result.triage_providers.values():
+            label = attribution.label or "provider unknown (cached)"
             answered[label] = answered.get(label, 0) + 1
         by_provider = "".join(f"{label}: {count}; " for label, count in answered.items())
         lines += [
