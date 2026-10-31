@@ -472,7 +472,13 @@ def format_timeline(report: TimelineReport) -> str:
 
     previous = None
     for point in report.points:
-        change = "" if previous is None else f"{point.raw_score - previous.raw_score:+.1f}"
+        if previous is None:
+            change = ""
+        elif previous.complete and point.complete:
+            change = f"{point.raw_score - previous.raw_score:+.1f}"
+        else:
+            # A failed scanner changes the score without any code change.
+            change = "?"
         if point.attribution == "baseline":
             new = fixed = "-"
         elif point.attribution == "unknown":
@@ -485,6 +491,8 @@ def format_timeline(report: TimelineReport) -> str:
             f"{point.short_sha:<9} {point.committed_at[:10]:<10} {point.raw_score:>7.1f} "
             f"{change:>7} {point.unique_issues:>6}  {new:>4} {fixed:>5}  {subject}{marker}"
         )
+        for problem in point.scanner_problems:
+            lines.append(f"{'':<9} ! {problem}")
         previous = point
 
     peak = report.biggest_increase

@@ -246,3 +246,61 @@ def test_cli_rejects_bad_options_and_non_repositories(tmp_path: Path, monkeypatc
     assert cli.main(["history", str(plain), "--commits", "0"]) == cli.EXIT_USAGE_ERROR
     assert cli.main(["history", str(plain), "--db", str(tmp_path / "h.db")]) == cli.EXIT_USAGE_ERROR
     assert "Not a Git repository" in capsys.readouterr().err
+
+
+def test_incomplete_commit_explains_which_scanner_failed_and_hides_fake_change(
+    repo: Path, tmp_path: Path, capsys
+):
+    """Reproduces the Windows case: one commit's Semgrep run times out."""
+    calls = {"count": 0}
+
+    def flaky_semgrep(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 3:  # the newest commit
+            return ScannerRunResult(
+                scanner="semgrep",
+                status=ScannerStatus.PARTIAL,
+                duration_seconds=0,
+                errors=["Timeout when running rules on app.py"],
+            )
+        return ScannerRunResult(scanner="semgrep", status=ScannerStatus.SUCCESS, duration_seconds=0)
+
+    with (
+        patch("silentsec.scanners.scanner_service.run_semgrep", flaky_semgrep),
+        patch("silentsec.scanners.scanner_service.run_bandit", skipped("bandit")),
+        patch("silentsec.scanners.scanner_service.run_gitleaks", skipped("gitleaks")),
+    ):
+        report = build_timeline(repo, database=tmp_path / "h.db")
+        # Fresh counter and database so the CLI run hits the same failure.
+        calls["count"] = 0
+        cli.main(["history", str(repo), "--db", str(tmp_path / "cli.db")])
+
+    last = report.points[-1]
+    assert not last.complete
+    assert last.scanner_problems == ["semgrep (partial): Timeout when running rules on app.py"]
+    # The drop to the last commit is not counted as a real change.
+    assert report.biggest_increase.subject == "Refactor loader"
+
+    output = capsys.readouterr().out
+    last_row = next(line for line in output.splitlines() if line.startswith(last.short_sha))
+    assert " ? " in last_row and "[incomplete scan]" in last_row
+    assert "! semgrep (partial): Timeout when running rules on app.py" in output
+
+
+def test_biggest_increase_ignores_steps_next_to_incomplete_scans():
+    from silentsec.history.timeline import TimelinePoint, TimelineReport
+
+    def point(sha: str, raw: float, complete: bool = True) -> TimelinePoint:
+        return TimelinePoint(
+            commit_sha=sha * 40, short_sha=sha * 8, committed_at="2026-10-01T00:00:00+00:00",
+            subject=sha, score=raw, raw_score=raw, security_points=raw, architecture_points=0,
+            unique_issues=1, complete=complete,
+        )
+
+    report = TimelineReport(
+        repo_path="r", branch="main", analysis_version="v", database="d",
+        points=[point("a", 10), point("b", 0, complete=False), point("c", 40), point("d", 45)],
+    )
+
+    # 0 -> 40 crosses an incomplete scan and is ignored; 40 -> 45 is the real rise.
+    assert report.biggest_increase.subject == "d"

@@ -35,6 +35,8 @@ class StoredScan(BaseModel):
     unique_issues: int
     complete: bool
     scanner_statuses: dict[str, str] = Field(default_factory=dict)
+    # Why a scanner did not succeed, e.g. "semgrep (partial): timed out".
+    scanner_problems: list[str] = Field(default_factory=list)
     findings: list[Finding] = Field(default_factory=list)
 
 
