@@ -7,6 +7,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
+from silentsec.process import run_bounded
 from silentsec.schemas import Finding, FindingCategory, Severity
 
 from .common import create_fingerprint, normalize_file_path
@@ -177,17 +178,7 @@ def _run_gitleaks_command(
 
     try:
         # Gitleaks receives a fixed argument list; shell execution is disabled.
-        completed = subprocess.run(  # nosec B603
-            command,
-            cwd=root,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout_seconds,
-            check=False,
-            shell=False,
-        )
+        completed = run_bounded(command, cwd=root, timeout=timeout_seconds)
     except FileNotFoundError:
         return ScannerRunResult(
             scanner="gitleaks",

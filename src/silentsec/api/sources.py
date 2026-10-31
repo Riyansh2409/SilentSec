@@ -23,6 +23,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from silentsec.process import run_bounded
 from silentsec.remediation.sandbox import sanitized_environment
 
 GITHUB_URL_RE = re.compile(
@@ -118,14 +119,8 @@ def clone_github(url: str, destination: Path, *, depth: int = 1) -> PreparedSour
     ]
     try:
         # Fixed argument list without a shell; the URL was validated above.
-        completed = subprocess.run(  # nosec B603
-            command,
-            capture_output=True,
-            text=True,
-            timeout=CLONE_TIMEOUT_SECONDS,
-            check=False,
-            shell=False,
-            env=_clone_environment(),
+        completed = run_bounded(
+            command, timeout=CLONE_TIMEOUT_SECONDS, env=_clone_environment()
         )
     except FileNotFoundError as exc:
         raise SourceError("Git is not installed on the server.") from exc

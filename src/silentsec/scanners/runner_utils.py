@@ -5,6 +5,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
+from silentsec.process import run_bounded
 from silentsec.schemas import Finding
 
 from .results import ScannerRunResult, ScannerStatus
@@ -61,17 +62,8 @@ def run_json_command(
 
     try:
         # Scanner command arguments are passed as a list; shell execution is disabled.
-        completed = subprocess.run( # nosec B603
-            command,
-            cwd=root,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout_seconds,
-            check=False,
-            shell=False,
-        )
+        # On timeout run_bounded kills the scanner's whole process tree.
+        completed = run_bounded(command, cwd=root, timeout=timeout_seconds)
     except FileNotFoundError:
         return ScannerRunResult(
             scanner=scanner,

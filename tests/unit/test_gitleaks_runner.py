@@ -99,7 +99,7 @@ def test_report_is_written_outside_repository_and_removed(tmp_path: Path, monkey
     )
     seen_paths: list[Path] = []
     monkeypatch.setattr(
-        gitleaks_runner.subprocess, "run", _fake_gitleaks(payload, seen_paths)
+        gitleaks_runner, "run_bounded", _fake_gitleaks(payload, seen_paths)
     )
 
     result = run_gitleaks(repo)
@@ -114,7 +114,7 @@ def test_report_is_written_outside_repository_and_removed(tmp_path: Path, monkey
 
 def test_empty_report_means_no_findings(tmp_path: Path, monkeypatch):
     seen_paths: list[Path] = []
-    monkeypatch.setattr(gitleaks_runner.subprocess, "run", _fake_gitleaks("", seen_paths))
+    monkeypatch.setattr(gitleaks_runner, "run_bounded", _fake_gitleaks("", seen_paths))
 
     result = run_gitleaks(tmp_path)
 
@@ -131,7 +131,7 @@ def test_report_is_removed_when_gitleaks_times_out(tmp_path: Path, monkeypatch):
         seen_paths.append(Path(report_arg.split("=", 1)[1]))
         raise subprocess.TimeoutExpired(command, kwargs["timeout"])
 
-    monkeypatch.setattr(gitleaks_runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(gitleaks_runner, "run_bounded", fake_run)
 
     result = run_gitleaks(tmp_path, timeout_seconds=1)
 
