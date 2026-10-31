@@ -61,3 +61,16 @@ def test_offline_output_escapes_paths_and_handles_empty_scan(tmp_path):
     assert 'No scored open findings' in render_debt_views(
         build_debt_views(score_findings([]), tmp_path)
     )
+
+
+def test_scan_survives_a_debt_view_failure(tmp_path, monkeypatch):
+    import silentsec.scanners.scanner_service as service
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("graph failed")
+
+    monkeypatch.setattr(service, "build_debt_views", boom)
+    (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
+    result = service.scan_repository(tmp_path)
+    assert result.debt_views is None
+    assert any("Debt visualization skipped" in error for error in result.errors)

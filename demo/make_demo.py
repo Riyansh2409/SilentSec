@@ -74,7 +74,8 @@ def calculate(expression):
     return eval(expression)
 '''
 
-REPORTS = '''
+REPORTS = '''from app.db import connect
+
 
 def sales_report(rows):
     total = 0
@@ -94,6 +95,12 @@ def refund_report(rows):
         count += 1
     average = total / count if count else 0
     return {"total": total, "count": count, "average": average}
+
+
+def save_report(name, report):
+    conn = connect()
+    conn.execute("INSERT INTO reports (name, total) VALUES (?, ?)", (name, report["total"]))
+    conn.commit()
 '''
 
 SQL_BAD = """cursor.execute(f"SELECT * FROM products WHERE name LIKE '%{term}%'")"""
