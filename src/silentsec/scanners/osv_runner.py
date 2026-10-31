@@ -188,7 +188,7 @@ def parse_osv_report(payload: dict[str, Any], root: Path) -> tuple[list[Finding]
     if results is None:
         return findings, errors
     if not isinstance(results, list):
-        raise ValueError("'results' must be a list")
+        raise TypeError("'results' must be a list")
 
     for result in results:
         source_path = str((result.get("source") or {}).get("path", ""))
@@ -266,8 +266,10 @@ def run_osv_scanner(repo_path: str | Path, timeout_seconds: int = 180) -> Scanne
             status=ScannerStatus.SKIPPED,
             duration_seconds=0,
             errors=[
-                "Informational: osv-scanner is not installed, so dependencies were not "
-                "checked for known vulnerabilities."
+                (
+                    "Informational: osv-scanner is not installed, so dependencies were not "
+                    "checked for known vulnerabilities."
+                )
             ],
         )
     if root.is_dir() and not find_dependency_files(root):
@@ -296,8 +298,10 @@ def run_osv_scanner(repo_path: str | Path, timeout_seconds: int = 180) -> Scanne
         result = result.model_copy(
             update={
                 "errors": [
-                    "OSV-Scanner could not reach the OSV vulnerability database "
-                    "(api.osv.dev); dependency checks need network access."
+                    (
+                        "OSV-Scanner could not reach the OSV vulnerability database "
+                        "(api.osv.dev); dependency checks need network access."
+                    )
                 ]
             }
         )

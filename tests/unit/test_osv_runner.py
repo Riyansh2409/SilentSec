@@ -215,10 +215,11 @@ def test_unreachable_database_fails_with_a_clear_message(project: Path, monkeypa
     result = run_osv_scanner(project)
 
     assert result.status == ScannerStatus.FAILED
-    assert result.errors == [
+    expected = (
         "OSV-Scanner could not reach the OSV vulnerability database (api.osv.dev); "
         "dependency checks need network access."
-    ]
+    )
+    assert result.errors == [expected]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="uses a POSIX shebang script as a fake binary")

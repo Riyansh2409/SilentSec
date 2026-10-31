@@ -1,7 +1,7 @@
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
-from unittest.mock import patch
 
 from silentsec.scanners.results import ScannerRunResult, ScannerStatus
 from silentsec.scanners.scanner_service import scan_repository
