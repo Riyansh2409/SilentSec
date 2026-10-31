@@ -86,6 +86,9 @@ class SecurityDebtReport(BaseModel):
     exact_duplicates_removed: int = Field(ge=0, default=0)
     cross_tool_duplicates_removed: int = Field(ge=0, default=0)
     same_handler_duplicates_removed: int = Field(ge=0, default=0)
+    # Same issue reported under rules with different CWEs (e.g. eval: Bandit
+    # B307 and Semgrep eval-exec), or one secret matched by several rules.
+    equivalent_rule_duplicates_removed: int = Field(ge=0, default=0)
     highest_severity: Severity | None = None
     scored_findings: list[ScoredFinding] = Field(default_factory=list)
     correlation_groups: list[CorrelationGroup] = Field(default_factory=list)
@@ -414,6 +417,12 @@ def score_findings(
         if group.correlation_type == "same_exception_handler"
     )
 
+    equivalent_rule_duplicates_removed = sum(
+        len(group.findings) - 1
+        for group in correlation_groups
+        if group.correlation_type in {"equivalent_rule", "same_secret"}
+    )
+
     return SecurityDebtReport(
         score=repository_score,
         raw_score=raw_score,
@@ -426,8 +435,10 @@ def score_findings(
             exact_duplicates_removed
             + cross_tool_duplicates_removed
             + same_handler_duplicates_removed
+            + equivalent_rule_duplicates_removed
         ),
         same_handler_duplicates_removed=same_handler_duplicates_removed,
+        equivalent_rule_duplicates_removed=equivalent_rule_duplicates_removed,
         fixed_findings_excluded=fixed_count,
         suppressed_findings_excluded=suppressed_count,
         highest_severity=highest_severity,

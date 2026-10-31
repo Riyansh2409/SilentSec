@@ -678,8 +678,8 @@ def format_gate(report: GateReport) -> str:
     if report.verdict != GateVerdict.INCOMPLETE and report.base_sha != report.head_sha:
         lines.append(
             f"\nScore (uncapped): {report.score_before:.1f} -> {report.score_after:.1f}  "
-            f"| new {report.new_count}, resolved {len(report.resolved)}, "
-            f"existing {report.existing_count}"
+            f"| new issues {report.new_issues}, resolved {len(report.resolved)} findings, "
+            f"existing issues {report.existing_issues}"
         )
     sections = [
         ("Blocking (new)", report.blocking),

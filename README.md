@@ -97,9 +97,20 @@ subfolder such as `silentsec scan src`) is scanned by Semgrep as a standalone
 project: a parent repository's `.gitignore` is not applied, while the built-in
 excludes (`.venv`, `node_modules`, ...) and `.semgrepignore` still are.
 
-When different tools report the same issue, SilentSec merges them: matching CWE
-on overlapping lines across tools, and equivalent exception-handler rules
-(Bandit B110/B112, SSEC-ARCH-001/002) on the same handler.
+When different tools report the same issue, SilentSec merges them:
+
+- matching CWE on overlapping lines across tools
+- equivalent exception-handler rules (Bandit B110/B112, SSEC-ARCH-001/002) on
+  the same handler
+- rule pairs that describe the same issue under different CWEs, on the same
+  line: eval (B307), exec (B102), `subprocess.getoutput` (B605), `os.exec*`/
+  `os.spawn*` (B606), unsafe YAML (B506), `mktemp` (B306) and Flask debug
+  (B201), each with its Semgrep counterpart
+- one secret matched by several rules on the same line (for example Gitleaks
+  `generic-api-key` and `github-pat`, or Bandit B105)
+
+The gate counts issues the same way, so "1 issue (2 scanner findings)" means
+two tools reported one problem.
 
 ## Architectural Debt Analyzer
 
