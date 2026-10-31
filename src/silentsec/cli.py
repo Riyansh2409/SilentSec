@@ -218,6 +218,14 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+TIMEOUT_HINT = "Try --timeout 600 for large repositories."
+
+
+def _is_timeout(error: str) -> bool:
+    # Matches run_json_command's "Scanner timed out after N seconds." message.
+    return "timed out after" in error
+
+
 def _score_line(score: float, raw_score: float) -> str:
     """The capped score, plus the uncapped value when the cap hides it."""
     line = f"Score: {score:.1f} / 100"
@@ -238,6 +246,8 @@ def format_summary(result: RepositoryScanResult, *, top: int = 10) -> str:
         )
         for error in scanner.errors[:2]:
             lines.append(f"      ! {error}")
+    if any(_is_timeout(error) for scanner in result.scanners for error in scanner.errors):
+        lines.append(TIMEOUT_HINT)
 
     debt = result.security_debt
     if debt is not None:
@@ -494,6 +504,8 @@ def format_timeline(report: TimelineReport) -> str:
         for problem in point.scanner_problems:
             lines.append(f"{'':<9} ! {problem}")
         previous = point
+    if any(_is_timeout(problem) for point in report.points for problem in point.scanner_problems):
+        lines.append(TIMEOUT_HINT)
 
     peak = report.biggest_increase
     if peak is not None:
@@ -518,8 +530,11 @@ def _run_history(args: argparse.Namespace, parser: argparse.ArgumentParser) -> i
         print("silentsec: --commits must be 1-50 and --timeout positive.", file=sys.stderr)
         return EXIT_USAGE_ERROR
 
-    def show_progress(index: int, total: int, sha: str) -> None:
-        print(f"Scanning commit {index}/{total} ({sha})...", file=sys.stderr)
+    def show_progress(index: int, total: int, sha: str, cached: bool) -> None:
+        if cached:
+            print(f"Using stored scan {index}/{total} ({sha})", file=sys.stderr)
+        else:
+            print(f"Scanning commit {index}/{total} ({sha})...", file=sys.stderr)
 
     try:
         report = build_timeline(

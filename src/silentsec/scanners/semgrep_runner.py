@@ -161,6 +161,12 @@ def run_semgrep(
             for directory in SEMGREP_EXCLUDED_DIRECTORIES
             for argument in ("--exclude", directory)
         ),
+        # A folder without its own .git (history snapshots, verify/fix copies)
+        # would otherwise use the nearest parent Git repository as the project
+        # root. If that is e.g. a home folder, file discovery walks all of it
+        # and can take minutes. ".git" may be a file in worktrees and
+        # submodules, so exists() keeps Semgrep's normal Git handling there.
+        *(() if (root / ".git").exists() else ("--project-root", ".")),
         # Scan "." from inside the repository (run_json_command uses cwd=root).
         # With an absolute target, --exclude patterns also match parent
         # folders, so a repository stored under e.g. ".../build/app" would be

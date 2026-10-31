@@ -44,6 +44,31 @@ def test_incomplete_scan_exits_two_and_warns(tmp_path: Path, capsys):
     assert "score is incomplete" in capsys.readouterr().out
 
 
+def test_scanner_timeout_adds_one_hint_line(tmp_path: Path, capsys):
+    result = make_result(tmp_path, complete=False)
+    result.scanners = [
+        ScannerRunResult(
+            scanner=name,
+            status=ScannerStatus.FAILED,
+            duration_seconds=180,
+            errors=["Scanner timed out after 180 seconds."],
+        )
+        for name in ("semgrep", "bandit")
+    ]
+
+    with patch.object(cli, "scan_repository", return_value=result):
+        cli.main(["scan", str(tmp_path)])
+
+    assert capsys.readouterr().out.count("Try --timeout 600 for large repositories.") == 1
+
+
+def test_no_timeout_hint_without_a_timeout(tmp_path: Path, capsys):
+    with patch.object(cli, "scan_repository", return_value=make_result(tmp_path, complete=False)):
+        cli.main(["scan", str(tmp_path)])
+
+    assert "Try --timeout" not in capsys.readouterr().out
+
+
 def test_json_report_is_written(tmp_path: Path):
     report_path = tmp_path / "report.json"
 
