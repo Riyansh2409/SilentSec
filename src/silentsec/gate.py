@@ -32,6 +32,7 @@ from silentsec.remediation.verify import SEVERITY_RANK
 from silentsec.scanners.results import ScannerStatus
 from silentsec.scanners.scanner_service import RepositoryScanResult, scan_repository
 from silentsec.schemas import Finding, FindingCategory, Severity
+from silentsec.scoring.correlation import correlate_findings
 from silentsec.verification import VerificationStatus, compare_findings
 
 SECURITY_CATEGORIES = {FindingCategory.SECURITY, FindingCategory.SECRET}
@@ -70,7 +71,11 @@ class GateReport(BaseModel):
     warnings: list[GateFinding] = Field(default_factory=list)
     other_new: list[GateFinding] = Field(default_factory=list)
     resolved: list[GateFinding] = Field(default_factory=list)
-    existing_count: int = 0
+    existing_count: int = 0  # scanner findings
+    # Unique issues: one issue reported by several scanners counts once.
+    blocking_issues: int = 0
+    new_issues: int = 0
+    existing_issues: int = 0
     score_before: float = 0.0  # uncapped, so changes stay visible
     score_after: float = 0.0
     scanner_problems: list[str] = Field(default_factory=list)
@@ -209,29 +214,42 @@ def run_gate(
     comparison = compare_findings(base_result.findings, head_result.findings, scan_complete=True)
     threshold = SEVERITY_RANK[policy.fail_on]
 
+    blocking_findings: list[Finding] = []
     for finding in comparison.new_findings:
         item = _gate_finding(finding)
         if finding.category in SECURITY_CATEGORIES:
             if SEVERITY_RANK[finding.severity] >= threshold:
                 report.blocking.append(item)
+                blocking_findings.append(finding)
             else:
                 report.other_new.append(item)
         elif policy.fail_on_architecture:
             report.blocking.append(item)
+            blocking_findings.append(finding)
         else:
             report.warnings.append(item)
 
+    existing_findings: list[Finding] = []
     for result in comparison.results:
         if result.status == VerificationStatus.RESOLVED:
             report.resolved.append(_gate_finding(result.baseline_finding))
         elif result.status in {VerificationStatus.STILL_OPEN, VerificationStatus.REINTRODUCED}:
             report.existing_count += 1
+            existing_findings.append(result.current_finding or result.baseline_finding)
+
+    report.blocking_issues = len(correlate_findings(blocking_findings))
+    report.new_issues = len(correlate_findings(comparison.new_findings))
+    report.existing_issues = len(correlate_findings(existing_findings))
+
+    def issues(count: int, findings: int) -> str:
+        text = f"{count} issue(s)"
+        return text if count == findings else f"{text} ({findings} scanner findings)"
 
     if report.blocking:
         report.verdict = GateVerdict.FAIL
         report.reasons.append(
-            f"The change introduces {len(report.blocking)} new finding(s) at or above the "
-            f"policy threshold ({policy.fail_on.value}"
+            f"The change introduces {issues(report.blocking_issues, len(report.blocking))} "
+            f"at or above the policy threshold ({policy.fail_on.value}"
             + (", or architecture" if policy.fail_on_architecture else "")
             + ")."
         )
@@ -245,7 +263,7 @@ def run_gate(
         )
     if report.existing_count:
         report.reasons.append(
-            f"{report.existing_count} existing finding(s) were already in {base}; "
-            "they do not block this change."
+            f"{issues(report.existing_issues, report.existing_count)} already existed in "
+            f"{base}; they do not block this change."
         )
     return report

@@ -9,7 +9,7 @@ from silentsec.architecture.import_analyzer import (
     ImportDependency,
     module_name_for_file,
 )
-from silentsec.schemas.finding import Finding, Severity
+from silentsec.schemas.finding import Finding, FindingCategory, Severity
 
 
 class CorrelationEvidence(BaseModel):
@@ -171,33 +171,125 @@ EXCEPTION_HANDLER_RULES: frozenset[tuple[str, str]] = frozenset(
     }
 )
 
+_SEMGREP = "silentsec.python."
+
+# Pairs of rules from different tools that describe the same issue but carry
+# different CWE numbers, so the CWE-based cross-tool matching cannot join
+# them (for example Bandit labels eval() as CWE-78, Semgrep as CWE-95).
+# Findings are merged only when they start on the same line of the same file.
+EQUIVALENT_RULES: tuple[tuple[str, frozenset[tuple[str, str]]], ...] = (
+    ("eval()", frozenset({("bandit", "b307"), ("semgrep", _SEMGREP + "code-injection.eval-exec")})),
+    ("exec()", frozenset({("bandit", "b102"), ("semgrep", _SEMGREP + "code-injection.eval-exec")})),
+    (
+        "shell command output",
+        frozenset(
+            {("bandit", "b605"), ("semgrep", _SEMGREP + "command-injection.subprocess-getoutput")}
+        ),
+    ),
+    (
+        "process spawn",
+        frozenset({("bandit", "b606"), ("semgrep", _SEMGREP + "command-injection.exec-spawn")}),
+    ),
+    (
+        "unsafe YAML load",
+        frozenset({("bandit", "b506"), ("semgrep", _SEMGREP + "deserialization.yaml-unsafe-load")}),
+    ),
+    ("insecure temp file", frozenset({("bandit", "b306"), ("semgrep", _SEMGREP + "tempfile.mktemp")})),
+    (
+        "Flask debug mode",
+        frozenset({("bandit", "b201"), ("semgrep", _SEMGREP + "flask.debug-enabled")}),
+    ),
+)
+
+# Bandit's hard-coded password tests; together with every Gitleaks rule they
+# describe "a secret is written in the code".
+BANDIT_SECRET_RULES = frozenset({"b105", "b106", "b107"})
+
 
 def _is_exception_handler_rule(finding: Finding) -> bool:
     return (finding.tool.casefold(), finding.rule_id.casefold()) in EXCEPTION_HANDLER_RULES
 
 
+def _is_secret(finding: Finding) -> bool:
+    return finding.category == FindingCategory.SECRET or (
+        finding.tool.casefold() == "bandit"
+        and finding.rule_id.casefold() in BANDIT_SECRET_RULES
+    )
+
+
+def _rule_key(finding: Finding) -> tuple[str, str]:
+    return (finding.tool.casefold(), finding.rule_id.casefold())
+
+
+def _equivalence_class(finding: Finding) -> tuple[str, str] | None:
+    """(correlation type, class name) of a finding, or None if it has no class."""
+    if _is_exception_handler_rule(finding):
+        return ("same_exception_handler", "exception handler")
+    if _is_secret(finding):
+        return ("same_secret", "secret")
+    key = _rule_key(finding)
+    for name, rules in EQUIVALENT_RULES:
+        if key in rules:
+            return ("equivalent_rule", name)
+    return None
+
+
+_REASONS = {
+    "same_exception_handler": (
+        "Equivalent broad or silent exception-handler rules were reported for the same handler."
+    ),
+    "same_secret": "Several secret rules matched the same line; it is one secret.",
+}
+
+
 def _group_same_exception_handler(
     findings: list[Finding],
 ) -> tuple[list[CorrelationGroup], list[Finding]]:
-    """Merge handler findings that start on the same line of the same file.
+    """Merge findings of equivalent rules that start on the same line of the same file.
 
-    Requiring the same start line, not just overlapping ranges, keeps an
-    outer handler separate from a handler nested inside it.
+    Covers exception-handler rules, secrets matched by several rules, and the
+    rule pairs in EQUIVALENT_RULES. Requiring the same start line, not just
+    overlapping ranges, keeps an outer handler separate from a nested one.
+    A rule can belong to several pairs (Semgrep's eval-exec covers both
+    eval and exec), so pairs are matched on the actual rules present.
     """
-    by_location: dict[tuple[str, int], list[Finding]] = {}
+    by_location: dict[tuple[str, int, str, str], list[Finding]] = {}
     remaining: list[Finding] = []
 
     for finding in findings:
-        if _is_exception_handler_rule(finding):
-            key = (_normalized_path(finding.file_path), finding.start_line)
-            by_location.setdefault(key, []).append(finding)
-        else:
+        location = (_normalized_path(finding.file_path), finding.start_line)
+        kind = _equivalence_class(finding)
+        if kind is None:
             remaining.append(finding)
+        elif kind[0] == "equivalent_rule":
+            # Place the finding with the first pair whose partner is on this line.
+            placed = False
+            for name, rules in EQUIVALENT_RULES:
+                if _rule_key(finding) not in rules:
+                    continue
+                key = (*location, "equivalent_rule", name)
+                partners = [
+                    other
+                    for other in findings
+                    if other is not finding
+                    and _rule_key(other) in rules
+                    and _rule_key(other) != _rule_key(finding)
+                    and (_normalized_path(other.file_path), other.start_line) == location
+                ]
+                if partners:
+                    by_location.setdefault(key, []).append(finding)
+                    placed = True
+                    break
+            if not placed:
+                remaining.append(finding)
+        else:
+            by_location.setdefault((*location, *kind), []).append(finding)
 
     groups: list[CorrelationGroup] = []
 
     for key in sorted(by_location):
         members = by_location[key]
+        correlation_type, name = key[2], key[3]
 
         if len(members) == 1:
             remaining.extend(members)
@@ -207,10 +299,10 @@ def _group_same_exception_handler(
             CorrelationGroup(
                 representative=min(members, key=_representative_key),
                 findings=sorted(members, key=_stable_key),
-                correlation_type="same_exception_handler",
-                reason=(
-                    "Equivalent broad or silent exception-handler rules were "
-                    "reported for the same handler."
+                correlation_type=correlation_type,
+                reason=_REASONS.get(
+                    correlation_type,
+                    f"Different tools reported the same {name} issue on the same line.",
                 ),
                 evidence=_build_evidence(members),
             )

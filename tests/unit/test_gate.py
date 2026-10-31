@@ -271,3 +271,30 @@ def test_cli_reports_git_errors_as_usage_errors(tmp_path: Path, capsys):
     with patch.object(cli, "run_gate", side_effect=HistoryError("Unknown commit or branch: x")):
         assert cli.main(["gate", str(tmp_path), "--base", "x"]) == cli.EXIT_USAGE_ERROR
     assert "Unknown commit" in capsys.readouterr().err
+
+
+def test_one_issue_found_by_two_scanners_counts_once(repo: Path):
+    def two_tool_scan(root: Path, **kwargs) -> RepositoryScanResult:
+        result = fake_scan(root, **kwargs)
+        doubled = []
+        for finding in result.findings:
+            doubled.append(finding)
+            if finding.rule_id == "B605":  # semgrep reports the same os.system call
+                doubled.append(
+                    finding.model_copy(
+                        update={"tool": "semgrep", "rule_id": "os-system", "finding_id": "x"}
+                    )
+                )
+        return result.model_copy(
+            update={"findings": doubled, "security_debt": score_findings(doubled)}
+        )
+
+    commit(repo, {"util.py": "import os\nos.system(user)\n"}, "add command")
+
+    report = gate(repo, scan=two_tool_scan)
+
+    assert report.verdict == GateVerdict.FAIL
+    assert len(report.blocking) == 2
+    assert report.blocking_issues == 1
+    assert report.existing_issues == 1 and report.existing_count == 2
+    assert "1 issue(s) (2 scanner findings)" in report.reasons[0]
