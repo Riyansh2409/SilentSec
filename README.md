@@ -55,6 +55,14 @@ it from the [Gitleaks releases](https://github.com/gitleaks/gitleaks/releases)
 AI triage is optional. To enable it, copy `.env.example` to `.env` (or set the
 variables in your shell) and fill in your own keys. Never commit real keys.
 
+`.env` is loaded automatically when `silentsec` or the local frontend starts:
+
+- From the SilentSec checkout folder (next to `pyproject.toml`), or from the
+  file named by `SILENTSEC_ENV_FILE`. The current folder is **not** read,
+  because it is often the repository being scanned, which is untrusted.
+- Variables already set in your shell always win; empty values are skipped.
+- Values are never printed. The frontend only prints the names it loaded.
+
 How AI triage spends API quota:
 
 - Each finding goes to one provider at a time (Gemini primary, Gemini
