@@ -150,10 +150,53 @@ def test_lf_patch_applies_to_crlf_file(tmp_path: Path):
         result = apply_patch(copy, FIX_PATCH)
         patched = (copy.root / "app.py").read_bytes()
 
-    # git apply matches LF patch lines against CRLF lines itself; no retry needed.
+    # Newer Git matches LF patch lines against CRLF lines by itself, older Git
+    # needs the CRLF retry; either way the patch must apply.
     assert result.ok, result.errors
-    assert not result.line_endings_normalized
     assert patched.replace(b"\r\n", b"\n") == b'import os\nprint("safe")\n'
+
+
+@requires_git
+def test_lf_patch_on_crlf_file_is_retried_with_crlf(tmp_path: Path, monkeypatch):
+    """Covers the retry even on Git versions that would match by themselves."""
+    repo = make_repo(tmp_path / "repo")
+    (repo / "app.py").write_bytes(b"import os\r\nos.system(cmd)\r\n")
+    real_git_apply = sandbox._run_git_apply
+    seen: list[bytes] = []
+
+    def old_git_apply(copy, patch_file, strip_level, *, check_only):
+        data = patch_file.read_bytes()
+        seen.append(data)
+        if b"\r" not in data:  # behave like Git that does not match LF to CRLF
+            return subprocess.CompletedProcess([], 1, "", "error: patch does not apply")
+        return real_git_apply(copy, patch_file, strip_level, check_only=check_only)
+
+    monkeypatch.setattr(sandbox, "_run_git_apply", old_git_apply)
+
+    with create_isolated_copy(repo) as copy:
+        result = apply_patch(copy, FIX_PATCH)
+        patched = (copy.root / "app.py").read_bytes()
+
+    assert result.ok, result.errors
+    assert result.line_endings_normalized
+    assert patched.replace(b"\r\n", b"\n") == b'import os\nprint("safe")\n'
+    # Only content lines got CRLF; the ---/+++/@@ headers kept LF.
+    assert seen[-1] == (
+        b'--- a/app.py\n+++ b/app.py\n@@ -1,2 +1,2 @@\n'
+        b' import os\r\n-os.system(cmd)\r\n+print("safe")\r\n'
+    )
+
+
+@requires_git
+def test_lf_patch_on_lf_file_is_not_retried(tmp_path: Path):
+    repo = make_repo(tmp_path / "repo")
+    stale = FIX_PATCH.replace("-os.system(cmd)", "-os.system(other)")
+
+    with create_isolated_copy(repo) as copy:
+        result = apply_patch(copy, stale)
+
+    assert not result.ok
+    assert len(result.errors) == 1  # no CRLF attempt for a file without CRLF
 
 
 @requires_git

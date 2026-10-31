@@ -19,6 +19,7 @@ from typing import Self
 from pydantic import BaseModel, Field
 
 from silentsec.architecture.analyzer import EXCLUDED_DIRECTORIES as _ANALYZER_EXCLUDED
+from silentsec.remediation.patch import crlf_content_lines, validate_patch
 
 COPY_EXCLUDED_DIRECTORIES = frozenset(
     {*_ANALYZER_EXCLUDED, ".pytest_cache", ".ruff_cache"}
@@ -176,11 +177,15 @@ def apply_patch(copy: IsolatedCopy, diff_text: str, *, strip_level: int = 1) -> 
 
     If the patch fails and has Windows (CRLF) line endings, it is retried
     once with LF endings, because redirecting ``git diff`` output in
-    PowerShell converts line endings.
+    PowerShell converts line endings. The mirror case, an LF patch for files
+    stored with CRLF, is retried once with CRLF content lines: whether
+    ``git apply`` matches those by itself depends on the Git version.
     """
     attempts = [(diff_text, False)]
     if "\r\n" in diff_text:
         attempts.append((diff_text.replace("\r\n", "\n"), True))
+    elif _touches_crlf_file(copy, diff_text):
+        attempts.append((crlf_content_lines(diff_text), True))
 
     errors: list[str] = []
 
@@ -214,6 +219,16 @@ def apply_patch(copy: IsolatedCopy, diff_text: str, *, strip_level: int = 1) -> 
         return PatchApplyResult(ok=True, line_endings_normalized=normalized)
 
     return PatchApplyResult(ok=False, errors=errors)
+
+
+def _touches_crlf_file(copy: IsolatedCopy, diff_text: str) -> bool:
+    # touched_files are validated repository-relative paths (no "..", no
+    # absolute paths), so they stay inside the copy.
+    for path in validate_patch(diff_text).touched_files:
+        target = copy.root / path
+        if target.is_file() and not target.is_symlink() and b"\r\n" in target.read_bytes():
+            return True
+    return False
 
 
 def _git_error(prefix: str, completed: subprocess.CompletedProcess[str]) -> str:

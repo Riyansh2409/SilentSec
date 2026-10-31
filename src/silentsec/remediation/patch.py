@@ -149,6 +149,40 @@ class _ParsedDiff(BaseModel):
     changed_lines: dict[str, set[int]] = Field(default_factory=dict)
 
 
+def crlf_content_lines(diff_text: str) -> str:
+    """Give the hunk content lines of an LF diff CRLF endings, as git diff
+    would write them for files stored with CRLF.
+
+    Headers (diff/index/---/+++/@@) keep LF. A content line followed by
+    "\\ No newline at end of file" has no line ending at all, so it gets no
+    CR either. Hunks are delimited by their line counts, as in _parse_diff.
+    """
+    lines = diff_text.split("\n")
+    output: list[str] = []
+    old_remaining = new_remaining = 0
+
+    for index, line in enumerate(lines):
+        if (old_remaining > 0 or new_remaining > 0) and not line.startswith("\\"):
+            if line.startswith("-"):
+                old_remaining -= 1
+            elif line.startswith("+"):
+                new_remaining -= 1
+            else:
+                old_remaining -= 1
+                new_remaining -= 1
+            next_line = lines[index + 1] if index + 1 < len(lines) else ""
+            output.append(line if next_line.startswith("\\") else line + "\r")
+            continue
+
+        match = _HUNK_RE.match(line)
+        if match:
+            old_remaining = int(match.group(2)) if match.group(2) is not None else 1
+            new_remaining = int(match.group(4)) if match.group(4) is not None else 1
+        output.append(line)
+
+    return "\n".join(output)
+
+
 def _parse_diff(lines: list[str]) -> _ParsedDiff:
     """Walk a unified diff, using hunk line counts to know where hunks end.
 

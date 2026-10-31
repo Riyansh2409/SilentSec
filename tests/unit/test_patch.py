@@ -1,6 +1,11 @@
 import pytest
 
-from silentsec.remediation.patch import MAX_PATCH_BYTES, MAX_PATCH_FILES, validate_patch
+from silentsec.remediation.patch import (
+    MAX_PATCH_BYTES,
+    MAX_PATCH_FILES,
+    crlf_content_lines,
+    validate_patch,
+)
 
 VALID_PATCH = """\
 diff --git a/app/db.py b/app/db.py
@@ -179,3 +184,41 @@ def test_removed_lines_that_look_like_headers_stay_inside_the_hunk():
 
 def test_new_file_has_no_original_lines():
     assert "app/new.py" not in validate_patch(VALID_PATCH).changed_lines
+
+
+def test_crlf_content_lines_converts_only_hunk_content():
+    converted = crlf_content_lines(VALID_PATCH)
+
+    assert converted.splitlines(keepends=True)[:7] == [
+        "diff --git a/app/db.py b/app/db.py\n",
+        "--- a/app/db.py\n",
+        "+++ b/app/db.py\n",
+        "@@ -1,2 +1,2 @@\n",
+        "-x = 1\r\n",
+        "+x = 2\r\n",
+        " y = 3\r\n",
+    ]
+    # The second file's headers follow the first hunk and keep LF.
+    assert "new file mode 100644\n--- /dev/null\n+++ b/app/new.py\n@@ -0,0 +1 @@\n" in converted
+    assert converted.endswith("+z = 4\r\n")
+
+
+def test_crlf_content_lines_keeps_header_like_removed_lines_in_the_hunk():
+    patch = "--- a/q.sql\n+++ b/q.sql\n@@ -1,2 +1,1 @@\n--- comment\n select 1\n"
+
+    assert crlf_content_lines(patch) == (
+        "--- a/q.sql\n+++ b/q.sql\n@@ -1,2 +1,1 @@\n--- comment\r\n select 1\r\n"
+    )
+
+
+def test_crlf_content_lines_leaves_line_before_no_newline_marker_without_cr():
+    # In a CRLF file without a final newline, the last line has no CR either.
+    patch = (
+        "--- a/f.py\n+++ b/f.py\n@@ -1,2 +1,2 @@\n a\n-b\n"
+        "\\ No newline at end of file\n+c\n\\ No newline at end of file\n"
+    )
+
+    assert crlf_content_lines(patch) == (
+        "--- a/f.py\n+++ b/f.py\n@@ -1,2 +1,2 @@\n a\r\n-b\n"
+        "\\ No newline at end of file\n+c\n\\ No newline at end of file\n"
+    )
