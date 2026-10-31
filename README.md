@@ -190,6 +190,25 @@ Analysis uses Python AST parsing and does not execute repository code. Oversized
 
 Coupling-hotspot analysis and near-duplicate (similar but not identical) detection are planned capabilities, not implemented features.
 
+## Test code and .silentsecignore
+
+Test and sample code often contains deliberate "bad" code (fake keys, `eval`
+examples). SilentSec still scans it, but keeps it out of the main score:
+
+- Files under `tests/`, `test/`, `__tests__/`, `fixtures/`,
+  `sample_repositories/` or `examples/`, and files named `test_*.py`,
+  `*_test.py` or `conftest.py`, are **test and sample code**. Their issues are
+  shown in a separate, collapsed "Test and sample code" section (HTML report,
+  CLI summary, local UI) with their own points.
+- A `.silentsecignore` file in the repository root excludes paths with
+  gitignore-style globs (`vendor/`, `*.min.js`, `/build`, `docs/**/gen_*.py`,
+  `!keep.py`). The report always states how many findings were excluded, by
+  which patterns, and lists the files.
+- `silentsec gate` does not block on test-code findings unless
+  `--include-tests` is set, and it always uses the **base** branch's
+  `.silentsecignore` for both versions, so a pull request cannot hide its own
+  findings by editing the ignore file.
+
 ## Explainable Score
 
 SilentSec reports a deterministic security-debt score alongside a breakdown of its contributing components. Each finding scores its severity points times a confidence factor; security and secret findings reachable from a web route are then multiplied by an exposure factor (see Exposure).
@@ -376,8 +395,8 @@ results, and offline HTML reports show top-file bars, a folder debt map, and mod
 dependency neighbourhoods. Select a module to see incoming/outgoing imports; click
 a file bar or folder file entry to inspect findings in the browser.
 
-File/folder points precede architecture and repository score caps. Tests and samples
-remain included in these totals. Graph colours represent highest finding severity;
+File/folder points precede architecture and repository score caps. Test/sample code
+and `.silentsecignore` paths are not in these totals. Graph colours represent highest finding severity;
 imports alone are not security findings. Static Python imports only are supported
 (src-layout repositories cover `src/`); dynamic and third-party imports are excluded.
 The graph retains up to 60 modules and 200 edges, prioritizing modules with debt;

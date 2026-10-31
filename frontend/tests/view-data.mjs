@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {returnedCount,reintroducedChanges,scanIncomplete,findingTags,mergeInfo} from '../web/data.js';
-import {cleanRepoPath,aiHasExternal} from '../web/data.js';
+import {cleanRepoPath,aiHasExternal,scopeLines} from '../web/data.js';
 import {exposureOf,aiDisclosure,scoredView,nativeIssueView,triageAttributionText} from '../web/data.js';
 const point={introduced:[{reintroduced:true,previously_fixed_in:'abc'},{reintroduced:false}]};
 assert.equal(returnedCount([point]),1);
@@ -33,3 +33,7 @@ assert.equal(cleanRepoPath('""'),'');
 assert.equal(aiHasExternal({ai_providers:[{name:'ollama',scope:'local'}]}),false);
 assert.equal(aiHasExternal({ai_providers:[{name:'ollama',scope:'local'},{name:'gemini-primary',scope:'external'}]}),true);
 assert.equal(aiHasExternal(undefined),false);
+assert.deepEqual(scopeLines(undefined),[]);
+assert.deepEqual(scopeLines({test_code_findings:0,ignored_findings:0,ignore_file_present:false}),[]);
+assert.match(scopeLines({test_code_findings:3,test_code_file_count:2})[0],/3 finding\(s\) in 2 test or sample/);
+assert.match(scopeLines({ignored_findings:4,ignored_files:['a.py'],ignored_files_truncated:1,ignore_patterns:['vendor/']})[0],/excluded by \.silentsecignore \(patterns: vendor\/\)/);

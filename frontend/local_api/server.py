@@ -127,6 +127,7 @@ def validate_request(body: dict) -> tuple[str, dict]:
         "head",
         "fail_on",
         "fail_on_architecture",
+        "include_tests",
     }
     if set(args) - allowed:
         raise InputError("Unknown operation setting.")
@@ -165,6 +166,7 @@ def validate_request(body: dict) -> tuple[str, dict]:
         "strict",
         "include_history",
         "fail_on_architecture",
+        "include_tests",
     ):
         if key in args and type(args[key]) is not bool:
             raise InputError(f"{key} must be true or false.")
@@ -510,8 +512,9 @@ class Handler(BaseHTTPRequestHandler):
                 data = json.loads(
                     (self.state.data_root / job["id"] / "export.json").read_text(encoding="utf-8")
                 )
+                candidates = [*data["findings"], *(data.get("test_findings") or [])]
                 finding = next(
-                    (f for f in data["findings"] if f["fingerprint"] == body.get("fingerprint")),
+                    (f for f in candidates if f["fingerprint"] == body.get("fingerprint")),
                     None,
                 )
                 if not finding:

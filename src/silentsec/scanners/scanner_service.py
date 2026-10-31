@@ -11,6 +11,7 @@ from silentsec.architecture.debt_views import DebtViews, build_debt_views
 from silentsec.context import build_source_context
 from silentsec.languages import detect_languages
 from silentsec.schemas import Finding
+from silentsec.scope import ScopeSummary, split_findings
 from silentsec.scoring import SecurityDebtReport, score_findings
 from silentsec.triage import (
     TriageEngine,
@@ -71,6 +72,11 @@ class RepositoryScanResult(BaseModel):
     security_debt: SecurityDebtReport | None = None
     debt_views: DebtViews | None = None
     security_debt_complete: bool = False
+    # Findings in test/sample code: scanned and shown, not in the main score.
+    test_findings: list[Finding] = Field(default_factory=list)
+    test_code_debt: SecurityDebtReport | None = None
+    # What was kept out of the main score (test code, .silentsecignore).
+    scope: ScopeSummary = Field(default_factory=ScopeSummary)
     triage_results: list[TriageResult] = Field(default_factory=list)
     triage_attempted: bool = False
     triage_complete: bool = False
@@ -218,12 +224,15 @@ def scan_repository(
     ]
 
     # Preserve findings from every scanner. Scoring deduplicates independently.
-    findings = [finding for result in results for finding in result.findings]
+    all_findings = [finding for result in results for finding in result.findings]
+    # Test/sample code and .silentsecignore paths stay out of the main score.
+    findings, test_findings, _ignored, scope = split_findings(all_findings, root)
 
     errors = [f"{result.scanner}: {error}" for result in results for error in result.errors]
 
     overall_status = _overall_status(results)
     debt_report = score_findings(findings, repo_root=str(root))
+    test_code_debt = score_findings(test_findings) if test_findings else None
 
     # Optional scanners (dependency checks) may be skipped, e.g. when the tool is
     # not installed or there is nothing to check, without making the result
@@ -357,6 +366,9 @@ def scan_repository(
         security_debt=debt_report,
         debt_views=debt_views,
         security_debt_complete=security_debt_complete,
+        test_findings=test_findings,
+        test_code_debt=test_code_debt,
+        scope=scope,
         triage_results=triage_results,
         triage_attempted=triage_attempted,
         triage_complete=triage_complete,

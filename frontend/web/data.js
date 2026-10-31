@@ -51,3 +51,11 @@ export function triageAttributionText(value) {
 
 // "Copy as path" on Windows wraps the folder in quotes; drop one matching pair.
 export function cleanRepoPath(value){let v=String(value??'').trim();if(v.length>=2&&v[0]===v[v.length-1]&&(v[0]==='"'||v[0]==="'"))v=v.slice(1,-1).trim();return v}
+// Plain sentences about what was kept out of the main score (mirrors ScopeSummary.lines).
+export function scopeLines(scope){
+ if(!scope)return [];const out=[];
+ if(scope.test_code_findings)out.push(`${scope.test_code_findings} finding(s) in ${scope.test_code_file_count} test or sample file(s) are shown separately and not counted in the main score.`);
+ if(scope.ignored_findings)out.push(`${scope.ignored_findings} finding(s) in ${(scope.ignored_files||[]).length+(scope.ignored_files_truncated||0)} file(s) were excluded by .silentsecignore (patterns: ${(scope.ignore_patterns||[]).join(', ')}).`);
+ else if(scope.ignore_file_present)out.push('.silentsecignore is present but excluded no findings.');
+ return out;
+}

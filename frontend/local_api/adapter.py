@@ -251,6 +251,7 @@ def run(operation: str, args: dict, directory: Path, data_root: Path) -> dict:
             policy=GatePolicy(
                 fail_on=Severity(args.get("fail_on", "high")),
                 fail_on_architecture=args.get("fail_on_architecture", False),
+                include_tests=args.get("include_tests", False),
             ),
             timeout_seconds=timeout,
         )

@@ -418,6 +418,50 @@ def _findings(result: RepositoryScanResult, snippets: dict[str, str]) -> str:
     )
 
 
+def _scope(result: RepositoryScanResult) -> str:
+    """What was kept out of the main score, and the test/sample code issues."""
+    sentences = result.scope.lines()
+    if not sentences:
+        return ""
+    parts = ["<h2>Not in the score</h2>"]
+    parts += [f'<p class="lede">{_e(sentence)}</p>' for sentence in sentences]
+    if result.scope.ignored_files:
+        files = "".join(f"<li>{_e(path)}</li>" for path in result.scope.ignored_files)
+        more = (
+            f"<li>and {result.scope.ignored_files_truncated} more</li>"
+            if result.scope.ignored_files_truncated
+            else ""
+        )
+        parts.append(
+            "<details><summary>Files excluded by .silentsecignore</summary>"
+            f'<ul class="plain">{files}{more}</ul></details>'
+        )
+    debt = result.test_code_debt
+    if debt is not None and debt.scored_findings:
+        rows = "".join(
+            "<tr>"
+            f'<td><span class="{_severity_class(item.finding.severity)}">'
+            f"{_severity_label(item.finding.severity)}</span></td>"
+            f"<td>{_e(item.finding.message.split('. ')[0][:140])}"
+            f'<div class="tools">{_e(item.finding.tool)} {_e(item.finding.rule_id)}</div></td>'
+            f'<td class="loc">{_e(item.finding.file_path)}:{item.finding.start_line}</td>'
+            f'<td class="num hide-narrow">{item.score:.1f}</td>'
+            "</tr>"
+            for item in debt.scored_findings
+        )
+        parts.append(
+            "<details><summary>Test and sample code: "
+            f"{_plural(debt.unique_open_findings_count, 'issue')}, "
+            f"{debt.raw_score:.1f} points (not in the score)</summary>"
+            '<p class="explain">Test and sample code often contains deliberate examples of bad '
+            "code. These issues are listed for review but do not change the score above.</p>"
+            '<div class="table-wrap"><table><thead><tr><th>Severity</th><th>Issue</th>'
+            '<th>Location</th><th class="num hide-narrow">Points</th></tr></thead>'
+            f"<tbody>{rows}</tbody></table></div></details>"
+        )
+    return "".join(parts)
+
+
 def _patterns(result: RepositoryScanResult) -> str:
     debt = result.security_debt
     if debt is None or not debt.recurring_patterns:
@@ -712,6 +756,7 @@ def render_report(
         f"{_composition(scan)}{_facts(scan)}{_scanners(scan)}</section>"
         f"{_findings(scan, snippets or {})}"
         f"{render_debt_views(scan.debt_views)}"
+        f"{_scope(scan)}"
         f"{_patterns(scan)}"
         f"{_timeline(timeline, timeline_note)}"
         f"{_fixes(fixes)}"

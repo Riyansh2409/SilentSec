@@ -9,7 +9,8 @@ from silentsec.scoring.engine import SecurityDebtReport
 
 VIEW_NOTE = (
     "Points sum deduplicated open findings before repository and architecture caps; "
-    "they need not sum to the repository score. Test/sample findings are included. "
+    "they need not sum to the repository score. Test/sample code and .silentsecignore "
+    "paths are not included (see the separate test-code section). "
     "Colours show highest finding severity, not remediation effort. "
     "Dependencies are static repository-local Python imports only; src-layout analysis "
     "covers src/. Dynamic and third-party imports are not covered. "
