@@ -294,6 +294,64 @@ malicious repository cannot run code in the viewer's browser. Secret values and
 the code around secret findings are never included. It follows the system
 light or dark theme and prints cleanly.
 
+## HTTP API (for a web frontend)
+
+`silentsec serve` starts an HTTP API so a web page can scan a public GitHub
+repository or an uploaded file. Install the extra packages first:
+
+```bash
+pip install -e ".[api]"
+silentsec serve                      # http://127.0.0.1:8000, docs at /docs
+silentsec serve --cors-origin http://localhost:5173
+```
+
+| Method | Path | Input | Returns |
+|---|---|---|---|
+| GET | `/api/health` | - | version, and which of git/semgrep/bandit/gitleaks are installed |
+| POST | `/api/scan/github` | JSON `{"url": "https://github.com/owner/repo", "history_commits": 10}` | scan result |
+| POST | `/api/scan/upload` | multipart form, field `file` (a `.zip` or one source file, max 20 MB) | scan result |
+| GET | `/api/scans` | - | recent scans, newest first |
+| GET | `/api/scans/{id}` | - | the full scan result again |
+| GET | `/api/scans/{id}/report` | - | the self-contained HTML report (can be shown in an iframe) |
+
+A scan result has `summary` (score, risk levels, issue counts), `scanners`,
+`issues` (severity, title, file and line, merged sources, points, fix effort
+and the surrounding code; code is withheld for possible secrets), `timeline`
+(Time Machine points for GitHub scans) and `report_url`. Errors return
+`{"detail": "..."}` with status 400 (bad input), 404, 413 (too large), 422
+(invalid request) or 429 (two scans already running). Full schemas are at
+`/docs`.
+
+```js
+const response = await fetch("http://127.0.0.1:8000/api/scan/github", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ url: "https://github.com/owner/repo", history_commits: 10 }),
+});
+const scan = await response.json(); // scan.summary.score, scan.issues, scan.report_url
+
+const form = new FormData();
+form.append("file", fileInput.files[0]);
+const uploaded = await (await fetch("http://127.0.0.1:8000/api/scan/upload", {
+  method: "POST",
+  body: form,
+})).json();
+```
+
+Safety:
+
+- Only public `https://github.com/owner/repo` links are accepted. Clones use no
+  stored credentials, prompts, submodules or LFS downloads, and symlinks are
+  checked out as plain files.
+- Zip uploads refuse absolute paths, `..` and symlinks, stop at 100 MB
+  extracted, and drop any `.git` folder.
+- Uploaded or cloned code is only read by the scanners, never run. AI triage
+  is off for API scans.
+- Temporary copies are deleted after each scan. Results are kept in memory for
+  the last 20 scans only.
+- The server listens on this computer only by default. `--host 0.0.0.0` lets
+  other devices on the network start scans; use it only on a network you trust.
+
 ## Planned Capabilities
 
 - Broader multi-language architectural analysis.

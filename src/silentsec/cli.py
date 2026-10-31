@@ -215,6 +215,26 @@ def _build_parser() -> argparse.ArgumentParser:
         default=180,
         help="Per-scanner timeout in seconds (default: 180).",
     )
+
+    serve = subcommands.add_parser(
+        "serve",
+        help="Start the HTTP API for a web frontend (docs at /docs).",
+    )
+    serve.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Address to listen on (default: 127.0.0.1, this computer only).",
+    )
+    serve.add_argument("--port", type=int, default=8000, help="Port (default: 8000).")
+    serve.add_argument(
+        "--cors-origin",
+        dest="cors_origins",
+        action="append",
+        default=[],
+        help="Frontend origin allowed to call the API, e.g. http://localhost:5173 "
+        "(repeatable; default: localhost ports 3000 and 5173). Also read from "
+        "SILENTSEC_API_CORS_ORIGINS (comma-separated).",
+    )
     return parser
 
 
@@ -597,6 +617,36 @@ def _run_report(args: argparse.Namespace, parser: argparse.ArgumentParser) -> in
     return EXIT_SCAN_INCOMPLETE
 
 
+def _run_serve(args: argparse.Namespace) -> int:
+    try:
+        import uvicorn
+
+        from silentsec.api.app import DEFAULT_CORS_ORIGINS, create_app
+    except ImportError:
+        print(
+            'silentsec: the API needs extra packages. Run: pip install -e ".[api]"',
+            file=sys.stderr,
+        )
+        return EXIT_USAGE_ERROR
+
+    origins = list(args.cors_origins)
+    from_env = os.environ.get("SILENTSEC_API_CORS_ORIGINS", "")
+    origins += [origin.strip() for origin in from_env.split(",") if origin.strip()]
+    if not origins:
+        origins = list(DEFAULT_CORS_ORIGINS)
+
+    if args.host not in {"127.0.0.1", "localhost", "::1"}:
+        print(
+            f"Warning: listening on {args.host} lets other computers on this network "
+            "start scans. Use it only on a network you trust.",
+            file=sys.stderr,
+        )
+    print(f"SilentSec API: http://{args.host}:{args.port}/docs", file=sys.stderr)
+    print(f"Allowed frontend origins: {', '.join(origins)}", file=sys.stderr)
+    uvicorn.run(create_app(cors_origins=origins), host=args.host, port=args.port)
+    return EXIT_OK
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -609,6 +659,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_history(args, parser)
     if args.command == "report":
         return _run_report(args, parser)
+    if args.command == "serve":
+        return _run_serve(args)
 
     if args.timeout <= 0 or args.max_ai_findings <= 0 or args.top < 0:
         parser.print_usage(sys.stderr)
