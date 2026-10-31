@@ -7,6 +7,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from silentsec.gate import GateFinding, GatePolicy, GateReport, GateVerdict, run_gate
 from silentsec.history import HistoryError, TimelineReport, build_timeline
 from silentsec.remediation import FindingSummary, FixVerdict, FixVerificationReport, verify_fix
 from silentsec.remediation.ai_fix import AIFixReport, AIFixStatus, ai_fix_and_verify
@@ -210,6 +211,34 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Include AI triage for top findings (needs API keys).",
     )
     report.add_argument(
+        "--timeout",
+        type=int,
+        default=180,
+        help="Per-scanner timeout in seconds (default: 180).",
+    )
+
+    gate = subcommands.add_parser(
+        "gate",
+        help="Fail if a change (head) adds new security findings compared with base.",
+    )
+    gate.add_argument("path", type=Path, help="Git repository folder (never modified).")
+    gate.add_argument(
+        "--base", default="main", help="Branch or commit to compare against (default: main)."
+    )
+    gate.add_argument("--head", default="HEAD", help="Branch or commit to check (default: HEAD).")
+    gate.add_argument(
+        "--fail-on",
+        choices=[severity.value for severity in Severity],
+        default=Severity.HIGH.value,
+        help="Lowest severity of a NEW security finding that fails the gate (default: high).",
+    )
+    gate.add_argument(
+        "--fail-on-architecture",
+        action="store_true",
+        help="Also fail on new architecture/maintainability findings (default: warn only).",
+    )
+    gate.add_argument("--json", dest="json_path", type=Path, help="Write the gate result as JSON.")
+    gate.add_argument(
         "--timeout",
         type=int,
         default=180,
@@ -617,6 +646,94 @@ def _run_report(args: argparse.Namespace, parser: argparse.ArgumentParser) -> in
     return EXIT_SCAN_INCOMPLETE
 
 
+EXIT_GATE_FAILED = 1
+EXIT_GATE_INCOMPLETE = 2
+
+
+def _gate_line(item: GateFinding) -> str:
+    return (
+        f"  [{item.severity.value.upper():<8}] {item.file_path}:{item.start_line}  "
+        f"{item.tool} {item.rule_id}"
+    )
+
+
+def format_gate(report: GateReport) -> str:
+    """Human-readable gate result."""
+    title = {
+        GateVerdict.PASS: "PASS",
+        GateVerdict.FAIL: "FAIL",
+        GateVerdict.INCOMPLETE: "INCOMPLETE (cannot decide)",
+    }[report.verdict]
+    lines = [
+        (
+            f"SilentSec gate: {report.head_ref} ({report.head_sha[:8]}) vs "
+            f"{report.base_ref} ({report.base_sha[:8]})"
+        ),
+        f"Policy: fail on new security findings >= {report.policy.fail_on.value}"
+        + ("; architecture findings also fail" if report.policy.fail_on_architecture else ""),
+        "",
+        f"Gate: {title}",
+    ]
+    lines += [f"  {reason}" for reason in report.reasons]
+    if report.verdict != GateVerdict.INCOMPLETE and report.base_sha != report.head_sha:
+        lines.append(
+            f"\nScore (uncapped): {report.score_before:.1f} -> {report.score_after:.1f}  "
+            f"| new {report.new_count}, resolved {len(report.resolved)}, "
+            f"existing {report.existing_count}"
+        )
+    sections = [
+        ("Blocking (new)", report.blocking),
+        ("Warnings (new architecture debt)", report.warnings),
+        ("New, below threshold", report.other_new),
+        ("Resolved by this change", report.resolved),
+    ]
+    for heading, items in sections:
+        if items:
+            lines.append(f"\n{heading} ({len(items)}):")
+            lines += [_gate_line(item) for item in items]
+    if report.scanner_problems:
+        lines.append("\nScanner problems:")
+        lines += [f"  ! {problem}" for problem in report.scanner_problems]
+        if any(_is_timeout(problem) for problem in report.scanner_problems):
+            lines.append(TIMEOUT_HINT)
+    lines.append("\nLimitations:")
+    lines += [f"  - {item}" for item in report.limitations]
+    return "\n".join(lines)
+
+
+def _run_gate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    if args.timeout <= 0:
+        parser.print_usage(sys.stderr)
+        print("silentsec: --timeout must be positive.", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+    policy = GatePolicy(
+        fail_on=Severity(args.fail_on), fail_on_architecture=args.fail_on_architecture
+    )
+    print(f"Scanning {args.base} and {args.head}...", file=sys.stderr)
+    try:
+        report = run_gate(
+            args.path,
+            base=args.base,
+            head=args.head,
+            policy=policy,
+            timeout_seconds=args.timeout,
+        )
+    except HistoryError as exc:
+        print(f"silentsec: {exc}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+
+    print(format_gate(report))
+    if args.json_path is not None:
+        args.json_path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+        print(f"\nJSON result written to {args.json_path}")
+
+    if report.verdict == GateVerdict.PASS:
+        return EXIT_OK
+    if report.verdict == GateVerdict.FAIL:
+        return EXIT_GATE_FAILED
+    return EXIT_GATE_INCOMPLETE
+
+
 def _run_serve(args: argparse.Namespace) -> int:
     try:
         import uvicorn
@@ -661,6 +778,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_report(args, parser)
     if args.command == "serve":
         return _run_serve(args)
+    if args.command == "gate":
+        return _run_gate(args, parser)
 
     if args.timeout <= 0 or args.max_ai_findings <= 0 or args.top < 0:
         parser.print_usage(sys.stderr)
