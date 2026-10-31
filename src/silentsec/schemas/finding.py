@@ -49,6 +49,8 @@ class Finding(BaseModel):
 
     cwe_id: str | None = None
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    # Dependency findings: every advisory id grouped into this one finding.
+    advisory_ids: list[str] = Field(default_factory=list)
     status: FindingStatus = FindingStatus.OPEN
 
     @model_validator(mode="after")

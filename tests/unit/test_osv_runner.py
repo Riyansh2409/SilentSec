@@ -92,13 +92,17 @@ def project(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_one_finding_per_vulnerability_group(project: Path):
+def test_one_finding_per_package(project: Path):
     findings, errors = parse_osv_report(report(project), project)
 
     assert errors == []
     assert [finding.rule_id for finding in findings] == [
-        "GHSA-xxxx-yyyy-zzzz",
-        "GHSA-aaaa-bbbb-cccc",
+        "vulnerable-dependency",
+        "vulnerable-dependency",
+    ]
+    assert [finding.advisory_ids for finding in findings] == [
+        ["GHSA-xxxx-yyyy-zzzz"],
+        ["GHSA-aaaa-bbbb-cccc"],
     ]
     jinja = findings[0]
     assert jinja.tool == "osv-scanner"
@@ -109,7 +113,7 @@ def test_one_finding_per_vulnerability_group(project: Path):
     assert jinja.cwe_id == "CWE-1336"
     assert "jinja2 2.4.1 (PyPI)" in jinja.message
     assert "Upgrade to 2.7.2 or later." in jinja.message
-    assert "CVE-2014-1402" in jinja.message and "PYSEC-2014-8" in jinja.message
+    assert "1 known vulnerability, highest HIGH: GHSA-xxxx-yyyy-zzzz" in jinja.message
 
 
 def test_missing_cvss_falls_back_to_medium_and_no_fixed_version(project: Path):
@@ -146,7 +150,7 @@ def test_withdrawn_advisories_are_ignored(project: Path):
 
     findings, _ = parse_osv_report(data, project)
 
-    assert [finding.rule_id for finding in findings] == ["GHSA-xxxx-yyyy-zzzz"]
+    assert [finding.advisory_ids for finding in findings] == [["GHSA-xxxx-yyyy-zzzz"]]
 
 
 def test_fingerprints_differ_per_package_on_the_same_line(project: Path):
@@ -245,3 +249,77 @@ def test_end_to_end_with_a_fake_osv_scanner(project: Path, tmp_path_factory, mon
     args = (bin_dir / "args.txt").read_text()
     assert args.startswith("scan source --format=json --recursive")
     assert args.endswith(" .")
+
+
+def test_many_advisories_for_one_package_are_one_issue(project: Path):
+    def advisory(number: int, cvss: str, fixed: str | None) -> tuple[dict, dict]:
+        events = [{"introduced": "0"}] + ([{"fixed": fixed}] if fixed else [])
+        vulnerability = {
+            "id": f"GHSA-{number:04d}-aaaa-bbbb",
+            "summary": f"Problem {number}",
+            "affected": [
+                {
+                    "package": {"name": "flask", "ecosystem": "PyPI"},
+                    "ranges": [{"type": "ECOSYSTEM", "events": events}],
+                }
+            ],
+        }
+        return vulnerability, {"ids": [vulnerability["id"]], "max_severity": cvss}
+
+    pairs = [
+        advisory(1, "5.0", "1.0"),
+        advisory(2, "7.5", "2.2.5"),
+        advisory(3, "4.0", "0.12.3"),
+        advisory(4, "6.1", None),
+    ]
+    data = {
+        "results": [
+            {
+                "source": {"path": str(project / "requirements.txt")},
+                "packages": [
+                    {
+                        "package": {"name": "flask", "version": "0.12.2", "ecosystem": "PyPI"},
+                        "vulnerabilities": [v for v, _ in pairs],
+                        "groups": [g for _, g in pairs],
+                    }
+                ],
+            }
+        ]
+    }
+
+    findings, _ = parse_osv_report(data, project)
+
+    assert len(findings) == 1
+    flask = findings[0]
+    assert flask.severity == Severity.HIGH  # the highest advisory
+    assert flask.advisory_ids[0] == "GHSA-0002-aaaa-bbbb"
+    assert sorted(flask.advisory_ids) == [f"GHSA-{n:04d}-aaaa-bbbb" for n in range(1, 5)]
+    assert "4 known vulnerabilities, highest HIGH" in flask.message
+    assert "Upgrade to 2.2.5 or later. 1 advisory(ies) have no fixed version yet." in flask.message
+
+
+def test_advisory_count_adds_a_capped_bump_to_the_score():
+    from silentsec.schemas import Finding
+    from silentsec.scoring import score_findings
+
+    def dependency(count: int) -> Finding:
+        return Finding(
+            fingerprint=f"dep-{count}",
+            tool="osv-scanner",
+            rule_id="vulnerable-dependency",
+            file_path="requirements.txt",
+            start_line=1,
+            category=FindingCategory.SECURITY,
+            severity=Severity.HIGH,
+            message="Dependency x",
+            confidence=0.9,
+            advisory_ids=[f"GHSA-{n}" for n in range(count)],
+        )
+
+    one, three, many = (
+        score_findings([dependency(n)]).scored_findings[0] for n in (1, 3, 25)
+    )
+    assert one.score == pytest.approx(15 * 0.95)
+    assert three.score == pytest.approx(15 * 0.95 * 1.2)
+    assert many.score == pytest.approx(15 * 0.95 * 1.5)  # capped
+    assert "25 advisories" in many.explanation
