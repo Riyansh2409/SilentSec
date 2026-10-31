@@ -527,7 +527,7 @@ class Handler(BaseHTTPRequestHandler):
                         # Lines flagged as secrets are withheld from the snippet.
                         "secret_findings": [
                             f
-                            for f in data["findings"]
+                            for f in candidates
                             if f.get("category") == "secret"
                             and f.get("file_path") == finding.get("file_path")
                         ],
