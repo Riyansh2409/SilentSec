@@ -20,6 +20,22 @@ that accumulate hidden debt in AI-assisted codebases.
 - Time Machine: how security debt changed across recent commits, and which commit introduced or fixed each finding.
 - HTML report: one offline page with the score, issues and their evidence, history, and checked fixes.
 
+## Local browser interface
+
+The browser interface is in [`frontend/`](frontend/README.md). It uses this
+checkout as its backend and keeps its local environment and scan data ignored.
+On Windows with Python 3.11+ and Git installed:
+
+```powershell
+cd frontend
+.\setup.ps1
+.\Start-SilentSec.cmd
+```
+
+Open http://127.0.0.1:8767/app. Use `--port 8769` with the launcher if another
+local instance already uses 8767. See the frontend README for Gitleaks setup,
+optional Ollama/cloud configuration, source sharing and verification limits.
+
 ## Installation
 
 Requires Python 3.11+.

@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#090914"><title>SilentSec — Local workspace</title><link rel="stylesheet" href="/app.css"></head>
+<body>
+<a class="skip" href="#workspace">Skip to workspace</a>
+<aside class="sidebar"><a class="brand" href="/" aria-label="SilentSec landing page"><span class="brand-mark" aria-hidden="true">S</span>silentsec</a><p class="rail-label">LOCAL WORKSPACE</p><nav aria-label="Workspace"><a href="#overview" data-view="overview"><span aria-hidden="true">◈</span> Overview</a><a href="#sources" data-view="sources"><span aria-hidden="true">↥</span> GitHub / upload</a><a href="#findings" data-view="findings"><span aria-hidden="true">⌕</span> Findings</a><a href="#fixes" data-view="fixes"><span aria-hidden="true">⌘</span> Fix review</a><a href="#gate" data-view="gate"><span aria-hidden="true">◇</span> PR check</a><a href="#history" data-view="history"><span aria-hidden="true">↗</span> Time Machine</a><a href="#reports" data-view="reports"><span aria-hidden="true">▤</span> Reports</a></nav><div class="rail-bottom"><span class="local-dot"></span> Runs on this computer<p>Evidence first.<br>Human judgment always.</p><a href="/">← Back to the story</a></div></aside>
+<div class="shell"><header class="topbar"><span class="breadcrumb">SilentSec <span>/</span> <b id="breadcrumb">Overview</b></span><span id="connection" class="connection">Connecting locally…</span></header>
+<main id="workspace"><div class="page-heading"><div><p class="eyebrow">SECURITY DEBT INTELLIGENCE</p><h1 id="view-title">Your code. In focus.</h1><p id="view-description" class="muted">Scan a local repository and inspect what the backend finds.</p></div><div class="session-control"><label for="recent-jobs">THIS SESSION</label><select id="recent-jobs"><option value="">Open a completed operation</option></select></div></div>
+<div id="setup-notice" hidden></div>
+<section class="project-bar" aria-label="Repository selection"><div class="project-input"><label for="repo-path">REPOSITORY FOLDER</label><input id="repo-path" type="text" spellcheck="false" autocomplete="off" placeholder="C:\Projects\your-repository" aria-describedby="repo-help"><p id="repo-help">Enter a folder on this computer. Git history requires a Git checkout.</p></div><span class="local-tag">LOCAL FILES</span></section>
+<div id="notice" role="status" aria-live="polite" hidden></div><div id="job-status" class="job-status" role="status" aria-live="polite" hidden></div>
+<section id="view" aria-labelledby="view-title"></section>
+</main><footer><span id="backend-version">SilentSec local</span> <span>Scores and findings come from your backend. No demo results.</span></footer></div>
+<dialog id="finding-dialog" aria-labelledby="finding-title"><div class="dialog-header"><p class="eyebrow">FINDING DETAILS</p><button id="close-finding" class="icon-button" aria-label="Close finding details">×</button></div><div id="finding-detail"></div></dialog>
+<noscript><p class="notice">This local workspace needs JavaScript. The backend can also be used from its command line.</p></noscript>
+<script type="module" src="/app.js"></script>
+</body></html>
