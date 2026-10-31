@@ -51,6 +51,9 @@ class GateFinding(BaseModel):
     severity: Severity
     category: FindingCategory
     message: str
+    end_line: int | None = None
+    cwe_id: str | None = None
+    fingerprint: str | None = None
 
 
 class GatePolicy(BaseModel):
@@ -93,6 +96,9 @@ def _gate_finding(finding: Finding) -> GateFinding:
         severity=finding.severity,
         category=finding.category,
         message=finding.message,
+        end_line=finding.end_line,
+        cwe_id=finding.cwe_id,
+        fingerprint=finding.fingerprint,
     )
 
 
