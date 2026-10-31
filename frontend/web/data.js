@@ -47,3 +47,6 @@ export function triageAttributionText(value) {
   const locality=value.local===true?'local':value.local===false?'external':'locality unknown';
   return 'Answered by: '+name+' · '+locality+' · '+(value.cached?'cached result':'fresh result');
 }
+
+// "Copy as path" on Windows wraps the folder in quotes; drop one matching pair.
+export function cleanRepoPath(value){let v=String(value??'').trim();if(v.length>=2&&v[0]===v[v.length-1]&&(v[0]==='"'||v[0]==="'"))v=v.slice(1,-1).trim();return v}
