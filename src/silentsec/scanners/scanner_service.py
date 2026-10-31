@@ -25,6 +25,7 @@ from silentsec.verification import (
 
 from .bandit_runner import run_bandit
 from .gitleaks_runner import run_gitleaks
+from .osv_runner import run_osv_scanner
 from .results import ScannerRunResult, ScannerStatus
 from .semgrep_runner import run_semgrep
 
@@ -77,6 +78,8 @@ class RepositoryScanResult(BaseModel):
 
 
 ScannerRunner = Callable[..., ScannerRunResult]
+
+OPTIONAL_SCANNERS = frozenset({"osv"})
 
 
 def _run_safely(
@@ -194,6 +197,7 @@ def scan_repository(
         ("bandit", run_bandit),
         ("gitleaks", run_gitleaks),
         ("architecture", run_architecture_analyzer),
+        ("osv", run_osv_scanner),
     ]
 
     results = [
@@ -214,7 +218,14 @@ def scan_repository(
     overall_status = _overall_status(results)
     debt_report = score_findings(findings, repo_root=str(root))
 
-    security_debt_complete = all(result.status == ScannerStatus.SUCCESS for result in results)
+    # Optional scanners (dependency checks) may be skipped, e.g. when the tool is
+    # not installed or there is nothing to check, without making the result
+    # incomplete. A core code scanner that was skipped still means "incomplete".
+    security_debt_complete = all(
+        result.status == ScannerStatus.SUCCESS
+        or (result.scanner in OPTIONAL_SCANNERS and result.status == ScannerStatus.SKIPPED)
+        for result in results
+    )
 
     verification_attempted = baseline_findings is not None
     verification_report = _build_verification_report(

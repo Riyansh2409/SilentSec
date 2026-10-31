@@ -84,6 +84,7 @@ finding as resolved.
 | Bandit | Python security issues | Runs only when the repository has Python files. |
 | Gitleaks | Hard-coded secrets | Secret values are redacted and never sent to AI providers. |
 | Architecture analyzer | Structural debt | See below. |
+| OSV-Scanner (optional) | Known-vulnerable dependency versions | Reads `requirements*.txt`, `poetry.lock`, `uv.lock`, `package-lock.json` and other lockfiles, and checks each pinned version against the [OSV database](https://osv.dev). Needs network access to api.osv.dev. Skipped, without making the scan incomplete, when `osv-scanner` is not installed or there are no dependency files. One finding per advisory group, on the line that declares the package, with the first fixed version. |
 
 Scanners never execute repository code and never write into the scanned
 repository. The bundled Semgrep rules are a focused starter set of 13 Python

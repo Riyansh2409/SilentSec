@@ -1,6 +1,8 @@
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from silentsec.scanners.results import ScannerRunResult, ScannerStatus
 from silentsec.scanners.scanner_service import scan_repository
 from silentsec.schemas.finding import (
@@ -53,7 +55,19 @@ def make_result(
     )
 
 
-def test_runs_all_four_scanners(tmp_path: Path):
+@pytest.fixture(autouse=True)
+def no_osv():
+    """Dependency scanning is covered in test_osv_runner; keep these tests offline."""
+    with patch(
+        "silentsec.scanners.scanner_service.run_osv_scanner",
+        return_value=ScannerRunResult(
+            scanner="osv", status=ScannerStatus.SKIPPED, duration_seconds=0
+        ),
+    ) as osv:
+        yield osv
+
+
+def test_runs_all_five_scanners(tmp_path: Path, no_osv):
     with (
         patch(
             "silentsec.scanners.scanner_service.run_semgrep",
@@ -75,12 +89,13 @@ def test_runs_all_four_scanners(tmp_path: Path):
         report = scan_repository(tmp_path)
 
     assert report.status == ScannerStatus.SUCCESS
-    assert len(report.scanners) == 4
+    assert len(report.scanners) == 5
     assert [item.scanner for item in report.scanners] == [
         "semgrep",
         "bandit",
         "gitleaks",
         "architecture",
+        "osv",
     ]
     assert report.security_debt is not None
     assert report.security_debt.score == 0
@@ -91,6 +106,7 @@ def test_runs_all_four_scanners(tmp_path: Path):
     bandit.assert_called_once()
     gitleaks.assert_called_once()
     architecture.assert_called_once()
+    no_osv.assert_called_once()
 
 def test_one_failed_scanner_does_not_abort_others(tmp_path: Path):
     with (
@@ -118,7 +134,7 @@ def test_one_failed_scanner_does_not_abort_others(tmp_path: Path):
         report = scan_repository(tmp_path)
 
     assert report.status == ScannerStatus.PARTIAL
-    assert len(report.scanners) == 4
+    assert len(report.scanners) == 5
     assert any("simulated failure" in error for error in report.errors)
     assert report.security_debt is not None
     assert report.security_debt_complete is False
@@ -146,7 +162,7 @@ def test_scanner_exception_does_not_abort_others(tmp_path: Path):
         report = scan_repository(tmp_path)
 
     assert report.status == ScannerStatus.PARTIAL
-    assert len(report.scanners) == 4
+    assert len(report.scanners) == 5
     assert report.scanners[0].status == ScannerStatus.FAILED
     assert "simulated exception" not in str(report.errors)
     assert report.security_debt_complete is False

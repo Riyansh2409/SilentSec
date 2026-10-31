@@ -42,6 +42,8 @@ jobs:
     env:
       GITLEAKS_VERSION: "8.21.2"
       GITLEAKS_SHA256: "5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba"
+      OSV_SCANNER_VERSION: "2.2.2"
+      OSV_SCANNER_SHA256: "c799274b682e0437c802d4714a136ad09b39c65547c460049ba5358d28afa576"
 
     steps:
       - name: Checkout repository
@@ -67,6 +69,15 @@ jobs:
           tar -xzf "$archive" gitleaks
           sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
           gitleaks version
+
+      - name: Install OSV-Scanner (pinned and checksum-verified)
+        run: |
+          curl -sSfL -o osv-scanner \
+            "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          echo "${OSV_SCANNER_SHA256}  osv-scanner" | sha256sum --check
+          sudo install -m 0755 osv-scanner /usr/local/bin/osv-scanner
+          rm osv-scanner
+          osv-scanner --version
 
       # The real-scanner tests are skipped when a binary is missing; here all
       # scanners are installed, so they run against the actual tools.
@@ -101,3 +112,22 @@ jobs:
           assert "silentsec.python.code-injection.eval-exec" in rules, sorted(rules)
           EOF
           rm -rf "$snapshot"
+
+      # A known-vulnerable pin must produce an OSV finding from the live OSV
+      # database, placed on the line that declares the package.
+      - name: Dependency scan finds a known-vulnerable package
+        run: |
+          project="$RUNNER_TEMP/deps-project"
+          mkdir -p "$project"
+          printf 'requests==2.31.0\njinja2==2.4.1\n' > "$project/requirements.txt"
+          silentsec scan "$project" --json "$RUNNER_TEMP/deps.json" || true
+          python - "$RUNNER_TEMP/deps.json" <<'EOF'
+          import json, sys
+          report = json.load(open(sys.argv[1], encoding="utf-8"))
+          osv = next(s for s in report["scanners"] if s["scanner"] == "osv")
+          assert osv["status"] == "success", osv
+          jinja = [f for f in report["findings"] if f["tool"] == "osv-scanner" and "jinja2" in f["message"].lower()]
+          assert jinja, [f["message"] for f in report["findings"]]
+          assert all(f["file_path"] == "requirements.txt" and f["start_line"] == 2 for f in jinja), jinja
+          print(f"OSV findings for jinja2: {len(jinja)}; first: {jinja[0]['rule_id']} {jinja[0]['severity']}")
+          EOF
