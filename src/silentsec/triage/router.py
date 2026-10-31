@@ -22,12 +22,12 @@ from pydantic import ValidationError
 from silentsec.schemas.finding import Finding
 
 from .cache import TriageCache, cache_key
-from .providers import ProviderUnavailableError, TriageProvider
+from .providers import ProviderUnavailableError, TriageProvider, is_local_provider
 from .sanitization import (
     prepare_context_for_triage,
     prepare_finding_for_triage,
 )
-from .schemas import TriageResult
+from .schemas import TriageAttribution, TriageResult
 
 logger = logging.getLogger(__name__)
 
@@ -79,16 +79,19 @@ class TriageRouter:
         self._cache = cache
         self._sleep = sleep
         self.provider_calls = 0
-        # "<name> <model>" of the provider that answered the last triage call;
-        # None when the result came from the cache.
-        self.last_provider: str | None = None
+        # Who produced the result of the last triage call, also for cache hits
+        # (cached=True; provider=None for entries stored before attribution).
+        self.last_attribution: TriageAttribution | None = None
         # First "cannot be reached" message per provider, safe to show users.
         self.provider_notes: dict[str, str] = {}
 
     @staticmethod
-    def _label(name: str, provider: TriageProvider) -> str:
-        model = getattr(provider, "model", "") or ""
-        return f"{name} {model}".strip()
+    def _attribution(name: str, provider: TriageProvider) -> TriageAttribution:
+        return TriageAttribution(
+            provider=name,
+            model=getattr(provider, "model", "") or None,
+            local=is_local_provider(name),
+        )
 
     @property
     def provider_signature(self) -> str:
@@ -111,7 +114,7 @@ class TriageRouter:
 
         safe_finding = prepare_finding_for_triage(finding)
         safe_context = prepare_context_for_triage(finding, context)
-        self.last_provider = None
+        self.last_attribution = None
 
         key: str | None = None
         if self._cache is not None:
@@ -121,10 +124,11 @@ class TriageRouter:
                 sanitized_context=safe_context,
                 provider_signature=self.provider_signature,
             )
-            cached = self._cache.get(key, finding=finding)
+            cached = self._cache.get_with_attribution(key, finding=finding)
             if cached is not None:
                 logger.info("Triage cache hit for fingerprint %s", finding.fingerprint)
-                return cached
+                result, self.last_attribution = cached
+                return result
 
         failures: list[tuple[str, Exception]] = []
 
@@ -169,10 +173,10 @@ class TriageRouter:
                     break
 
                 logger.info("Triage completed using provider %s", name)
-                self.last_provider = self._label(name, provider)
+                self.last_attribution = self._attribution(name, provider)
 
                 if self._cache is not None and key is not None:
-                    self._cache.put(key, result)
+                    self._cache.put(key, result, self.last_attribution)
 
                 return result
 

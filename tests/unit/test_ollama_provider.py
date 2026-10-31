@@ -307,7 +307,9 @@ def test_ollama_not_running_falls_back_and_the_scan_continues(tmp_path: Path):
     report = scan_with_router(tmp_path, router, findings)
 
     assert len(report.triage_results) == 2
-    assert report.triage_providers == {"fp-1": "groq cloud-model", "fp-2": "groq cloud-model"}
+    assert {fp: item.label for fp, item in report.triage_providers.items()} == {
+        "fp-1": "groq cloud-model", "fp-2": "groq cloud-model"
+    }
     # Shown once, and not retried: a server that is not running will not start.
     assert report.triage_errors == [
         (

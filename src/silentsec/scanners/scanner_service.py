@@ -18,6 +18,7 @@ from silentsec.triage import (
 )
 from silentsec.triage.providers import AIProviderConfigError
 from silentsec.triage.router import TriageBudgetExceededError
+from silentsec.triage.schemas import TriageAttribution
 from silentsec.verification import (
     VerificationHistory,
     VerificationReport,
@@ -72,8 +73,9 @@ class RepositoryScanResult(BaseModel):
     triage_attempted: bool = False
     triage_complete: bool = False
     triage_errors: list[str] = Field(default_factory=list)
-    # Finding fingerprint -> "<provider> <model>" that answered (cache hits omitted).
-    triage_providers: dict[str, str] = Field(default_factory=dict)
+    # Finding fingerprint -> provider and model that produced its triage, also
+    # for cache hits (cached=True; provider None for older cache entries).
+    triage_providers: dict[str, TriageAttribution] = Field(default_factory=dict)
     triage_cache_hits: int = Field(default=0, ge=0)
     triage_provider_calls: int = Field(default=0, ge=0)
     verification_report: VerificationReport | None = None
@@ -240,7 +242,7 @@ def scan_repository(
 
     triage_results: list[TriageResult] = []
     triage_errors: list[str] = []
-    triage_providers: dict[str, str] = {}
+    triage_providers: dict[str, TriageAttribution] = {}
     triage_cache_hits = 0
     triage_provider_calls = 0
     triage_attempted = enable_ai_triage
@@ -308,9 +310,9 @@ def scan_repository(
                         context=context,
                     )
                     triage_results.append(result)
-                    answered_by = getattr(router, "last_provider", None)
-                    if isinstance(answered_by, str):
-                        triage_providers[finding.fingerprint] = answered_by
+                    attribution = getattr(router, "last_attribution", None)
+                    if isinstance(attribution, TriageAttribution):
+                        triage_providers[finding.fingerprint] = attribution
 
                 except TriageBudgetExceededError:
                     triage_errors.append(
