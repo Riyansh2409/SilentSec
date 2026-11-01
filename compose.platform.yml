@@ -1,0 +1,28 @@
+services:
+  postgres:
+    image: postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
+    environment:
+      POSTGRES_USER: silentsec
+      POSTGRES_DB: silentsec
+      POSTGRES_PASSWORD: ${SILENTSEC_POSTGRES_PASSWORD:?Set a local database password}
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - silentsec-platform-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U silentsec -d silentsec"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  redis:
+    image: redis:7-alpine@sha256:8da19c7399dca900c6822a1cf30f9d2285585e2c4b457ff4095b0f4500054d3f
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "127.0.0.1:56379:6379"
+    volumes:
+      - silentsec-platform-redis:/data
+    restart: unless-stopped
+volumes:
+  silentsec-platform-postgres:
+  silentsec-platform-redis:

@@ -1,3 +1,12 @@
+## Connected login, billing and full workspace
+
+From the repository root, run `./Start-Platform.ps1`, then open
+http://127.0.0.1:8780/app. This serves the original interface with organization
+login, billing, durable jobs and the original workflow adapter. On a fresh clone,
+run `./frontend/setup.ps1 -Platform` first. See
+[the integration guide](../docs/frontend-integration.md). The standalone launcher
+below remains available for the original trusted local-only mode.
+
 # SilentSec frontend
 
 This folder contains the local browser interface and its connection layer. The backend is the parent SilentSec checkout (`../src/silentsec`), installed in editable mode. This integration was reviewed against main commit **3bf1a65** on 1 November 2026 and is on the local branch `codex/frontend-integration`.

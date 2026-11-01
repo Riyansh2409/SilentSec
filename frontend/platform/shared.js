@@ -1,0 +1,16 @@
+export const $=id=>document.getElementById(id);
+export const node=(tag,text,cls='')=>{const el=document.createElement(tag);if(text!==undefined&&text!==null)el.textContent=String(text);if(cls)el.className=cls;return el;};
+export const date=value=>value?new Date(value*1000).toLocaleString(): '—';
+export const format=value=>typeof value==='object'?JSON.stringify(value):String(value??'—');
+export const heading=(title,copy,label='SILENTSEC WORKSPACE')=>{const box=node('div',null,'page-heading');box.append(node('p',label,'eyebrow'),node('h1',title),node('p',copy,'muted'));return box;};
+export function card(title){const el=node('section',null,'card');if(title)el.append(node('h2',title));return el;}
+export function table(headers,rows){const wrap=node('div',null,'table-wrap');const t=node('table');const head=node('thead'),tr=node('tr');headers.forEach(h=>tr.append(node('th',h)));head.append(tr);const body=node('tbody');rows.forEach(row=>{const tr=node('tr');row.forEach(value=>{const td=node('td');td.append(value instanceof Node?value:node('span',format(value)));tr.append(td);});body.append(tr);});t.append(head,body);wrap.append(t);if(!rows.length)wrap.append(node('p','No records to show.','empty'));return wrap;}
+export function button(text,action,cls='button'){const b=node('button',text,cls);b.type='button';b.addEventListener('click',action);return b;}
+export const link=(text,href,cls='button')=>{const a=node('a',text,cls);a.href=href;return a;};
+export function field(label,type='text',options={}){const wrapper=node('label',label);const input=node('input');input.type=type;Object.assign(input,options);wrapper.append(input);return [wrapper,input];}
+export function notice(text,error=false){const target=$('message')||$('notice');target.hidden=false;target.textContent=text;target.className=error?'notice error':'notice';}
+export let me;
+export function setMe(value){me=value;}
+export async function api(path,options={}){const headers={...(options.headers||{})};if(options.method&&options.method!=='GET'){headers['X-CSRF-Token']=me?.csrf_token||'';headers['Idempotency-Key']=options.idempotencyKey||crypto.randomUUID();if(options.body&&!(options.body instanceof FormData)){headers['Content-Type']='application/json';options.body=JSON.stringify(options.body);}}const response=await fetch('/api/v1'+path,{...options,headers});if(response.status===401){location.assign(location.pathname.startsWith('/admin')?'/admin/login':'/login');throw new Error('Sign in again to continue.');}if(!response.ok){const data=await response.json().catch(()=>({}));const detail=data.detail;throw new Error(typeof detail==='string'?detail:detail?.message||detail?.code||'The request could not be completed.');}return response.json();}
+export async function initialize(){setMe(await api('/auth/me'));$('logout').addEventListener('click',async()=>{try{await api('/auth/logout',{method:'POST'});location.assign('/login');}catch(error){notice(error.message,true);}});return me;}
+export function busy(form,handler){form.addEventListener('submit',async event=>{event.preventDefault();const submit=form.querySelector('[type=submit]');if(submit)submit.disabled=true;try{await handler();}catch(error){notice(error.message,true);}finally{if(submit)submit.disabled=false;}});}
