@@ -613,7 +613,47 @@ def main():
     parser = argparse.ArgumentParser(description="Run the SilentSec local frontend and API.")
     parser.add_argument("--port", type=int, default=8767)
     parser.add_argument("--backend", type=Path, default=None)
+    parser.add_argument(
+        "--platform-url", help="Forward browser entry points to the authenticated local platform."
+    )
     args = parser.parse_args()
+    if args.platform_url:
+        destination = urlparse(args.platform_url)
+        if (
+            destination.scheme != "http"
+            or destination.hostname != "127.0.0.1"
+            or destination.username
+            or destination.path not in {"", "/"}
+            or destination.query
+            or destination.fragment
+        ):
+            parser.error("Platform URL must be an HTTP loopback origin.")
+
+        class Gateway(BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.headers.get("Host") != f"127.0.0.1:{args.port}":
+                    self.send_error(400)
+                    return
+                path = urlparse(self.path).path
+                if path not in {"/", "/app", "/login", "/workspace", "/admin", "/admin/login"}:
+                    self.send_error(404)
+                    return
+                self.send_response(302)
+                self.send_header("Location", args.platform_url.rstrip("/") + path)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        with ThreadingHTTPServer(("127.0.0.1", args.port), Gateway) as gateway:
+            print(f"SilentSec browser gateway: http://127.0.0.1:{args.port}", flush=True)
+            try:
+                gateway.serve_forever()
+            except KeyboardInterrupt:
+                pass
+        return
     config_path = ROOT / ".data" / "config.json"
     config_path.parent.mkdir(exist_ok=True)
     config = (

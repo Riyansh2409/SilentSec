@@ -29,3 +29,8 @@ Thumbs.db
 /frontend/.tools/
 /frontend/.cache/
 /frontend/.runtime/
+
+# SaaS private runtime
+.platform/
+.env.platform*
+!.env.platform.example

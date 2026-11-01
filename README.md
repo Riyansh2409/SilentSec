@@ -8,6 +8,23 @@ Explainable security and architectural debt intelligence for AI-assisted code.
 SilentSec detects security weaknesses and architectural patterns
 that accumulate hidden debt in AI-assisted codebases.
 
+## Optional SaaS platform (local development)
+
+A separate authenticated platform lives in [`src/silentsec/platform`](src/silentsec/platform)
+with customer/admin sign-in, organizations/RBAC, PostgreSQL persistence, monthly
+30-credit Free metering, durable scan jobs, usage/audit views, private reports,
+and bounded static graphs/patterns. The scanner and existing local interface remain separate.
+
+```powershell
+.\frontend\.venv\Scripts\python.exe -m pip install -e '.[platform,scanners,dev]'
+.\Start-Platform.ps1
+```
+
+Open http://127.0.0.1:8780/login. See [platform setup and limits](docs/platform.md)
+for local identities, Docker services, production requirements and features that
+remain unavailable (including payment checkout, private integrations and SaaS AI).
+This is a local foundation, not a production deployment.
+
 ## Current Capabilities
 
 - Security scanning with Semgrep, Bandit, and Gitleaks, normalized into one finding format.

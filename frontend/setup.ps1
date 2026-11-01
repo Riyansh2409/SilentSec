@@ -1,8 +1,9 @@
-param([string]$Backend = "", [string]$Python = "")
+param([string]$Backend = "", [string]$Python = "", [switch]$Platform)
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
 if (-not $Backend) {
-    if (Test-Path -LiteralPath '.data/config.json') { $Backend = (Get-Content '.data/config.json' -Raw | ConvertFrom-Json).backend_path }
+    if ($Platform) { $Backend = Split-Path -Parent $PSScriptRoot }
+    elseif (Test-Path -LiteralPath '.data/config.json') { $Backend = (Get-Content '.data/config.json' -Raw | ConvertFrom-Json).backend_path }
     else { $Backend = Split-Path -Parent $PSScriptRoot }
 }
 $Backend = (Resolve-Path -LiteralPath $Backend).Path
@@ -22,9 +23,11 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not prepare pip.' }
 & $localPython -m pip install --upgrade pip
 if ($LASTEXITCODE -ne 0) { throw 'Could not update pip.' }
 $package = "${Backend}[api,scanners]"
+if ($Platform) { $package = "${Backend}[platform,api,scanners]" }
 & $localPython -m pip install -e $package
 if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed. Review the error above.' }
 New-Item -ItemType Directory -Path '.data' -Force | Out-Null
 @{backend_path=$Backend} | ConvertTo-Json | Set-Content -LiteralPath '.data/config.json' -Encoding utf8
 Write-Host 'Python dependencies installed. Gitleaks is a separate executable; see README.md.'
 Write-Host 'Start with .\Start-SilentSec.cmd, then open http://127.0.0.1:8767'
+if ($Platform) { Write-Host 'For the connected login, billing and full workspace: cd ..; .\Start-Platform.ps1; open http://127.0.0.1:8780/app' }

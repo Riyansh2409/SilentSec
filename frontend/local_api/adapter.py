@@ -152,7 +152,9 @@ def probe() -> dict:
     }
 
 
-def run(operation: str, args: dict, directory: Path, data_root: Path) -> dict:
+def run(
+    operation: str, args: dict, directory: Path, data_root: Path, *, on_start=None, on_scan=None
+) -> dict:
     if operation == "probe":
         import json
 
@@ -170,11 +172,27 @@ def run(operation: str, args: dict, directory: Path, data_root: Path) -> dict:
         import httpx
 
         from silentsec.api.app import create_app
+        from silentsec.remediation.verify import verify_fix
+        from silentsec.scanners.scanner_service import scan_repository
+
+        def start_scan(*a, **kw):
+            if on_start:
+                on_start()
+            result = scan_repository(*a, **kw)
+            if on_scan:
+                on_scan(a[0], result)
+            return result
+
+        def start_verify(*a, **kw):
+            if on_start:
+                on_start()
+            return verify_fix(*a, **kw)
 
         async def native_scan():
             # Exercise the backend's own HTTP contract in-process; no extra public server.
             async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=create_app()), base_url="http://silentsec-local"
+                transport=httpx.ASGITransport(app=create_app(scan=start_scan, verify=start_verify)),
+                base_url="http://silentsec-local",
             ) as client:
                 if operation == "verify_github":
                     response = await client.post(
@@ -240,6 +258,8 @@ def run(operation: str, args: dict, directory: Path, data_root: Path) -> dict:
     actions = interfaces()
     repo = args["repo_path"]
     timeout = args.get("timeout", 180)
+    if on_start:
+        on_start()
     if operation == "gate":
         from silentsec.gate import GatePolicy
         from silentsec.schemas import Severity
@@ -263,6 +283,8 @@ def run(operation: str, args: dict, directory: Path, data_root: Path) -> dict:
             max_ai_triage_findings=args.get("max_ai_findings", 20),
             use_triage_cache=args.get("use_cache", True),
         )
+        if on_scan:
+            on_scan(repo, result)
     elif operation == "history":
         result = actions[operation](
             repo,
@@ -303,6 +325,8 @@ def run(operation: str, args: dict, directory: Path, data_root: Path) -> dict:
             timeout_seconds=timeout,
         )
         (directory / "report.html").write_text(html, encoding="utf-8")
+        if on_scan:
+            on_scan(repo, scan)
         return {
             "scan": scan.model_dump(mode="json"),
             "timeline": timeline.model_dump(mode="json") if timeline else None,
