@@ -58,7 +58,7 @@ def test_original_routes_and_login_preserve_navigation(platform):
     ]:
         assert f"#{name}" in response.text
     assert 'data-platform="true"' in response.text
-    for asset in ["app.js", "api.js", "data.js", "account.js", "account.css"]:
+    for asset in ["app.js", "api.js", "data.js", "debt-views.js", "account.js", "account.css"]:
         assert client.get("/original/" + asset).status_code == 200
     assert "nonce=" in client.get("/").text
     client.cookies.clear()
