@@ -11,6 +11,9 @@ AI_PROVIDERS_ENV = "SILENTSEC_AI_PROVIDERS"
 KNOWN_AI_PROVIDERS = ("gemini", "groq", "ollama")
 # Providers that run on the user's machine; code never leaves it.
 LOCAL_AI_PROVIDERS = {"ollama"}
+# Used when SILENTSEC_AI_PROVIDERS is not set: local first, so code stays on
+# this machine when Ollama runs; cloud providers are used only with a key.
+DEFAULT_PROVIDER_ORDER = ("ollama", "groq", "gemini")
 
 
 class AIProviderConfigError(ValueError):
@@ -28,7 +31,7 @@ class ProviderUnavailableError(ConnectionError):
 def configured_provider_order() -> list[str] | None:
     """Provider names from SILENTSEC_AI_PROVIDERS, or None when it is not set.
 
-    None keeps the default order (Gemini, then Groq, for configured keys).
+    None keeps the default order (Ollama, then Groq and Gemini for configured keys).
     """
     raw = os.getenv(AI_PROVIDERS_ENV, "").strip()
     if not raw:

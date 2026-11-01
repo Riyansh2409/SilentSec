@@ -65,8 +65,8 @@ variables in your shell) and fill in your own keys. Never commit real keys.
 
 How AI triage spends API quota:
 
-- Each finding goes to one provider at a time (Gemini primary, Gemini
-  fallback, then Groq, or the `SILENTSEC_AI_PROVIDERS` order). A timeout, connection error, or HTTP 408/429/5xx is
+- Each finding goes to one provider at a time (local Ollama, then Groq,
+  Gemini primary and Gemini fallback, or the `SILENTSEC_AI_PROVIDERS` order). A timeout, connection error, or HTTP 408/429/5xx is
   retried once on the same provider with backoff; authentication and request
   errors move straight to the next provider.
 - A scan makes at most `3 × --max-ai-findings` provider calls in total.
@@ -95,9 +95,10 @@ silentsec scan . --ai-triage
   of memory; on a CPU it works but is slow.
 - `SILENTSEC_AI_PROVIDERS` is a comma list (`ollama`, `groq`, `gemini`) that
   sets the order providers are tried in. Unknown names are an error. When it
-  is not set, the order stays Gemini primary, Gemini fallback, Groq (only those
-  with a key), and Ollama is not used. Listed cloud providers without a key
-  are skipped.
+  is not set, the default is `ollama,groq,gemini`: local Ollama first (no
+  key needed; if it is not running the scan says so and moves on), then cloud
+  providers that have a key. Listed cloud providers without a key are
+  skipped. Set `SILENTSEC_AI_PROVIDERS=ollama` to keep code on this machine.
 - `OLLAMA_HOST` (default `http://localhost:11434`), `OLLAMA_MODEL` (default
   `qwen2.5-coder:7b`) and `OLLAMA_TIMEOUT` (seconds, default 120) configure it.
   Only this machine is allowed as host (`localhost`, `127.0.0.1`, `::1`);
@@ -320,7 +321,8 @@ silentsec fix path\to\repository --finding FINGERPRINT --out fix.diff
   from Semgrep and Bandit) as targets.
 - Nothing is applied to your repository. `--out` saves the patch so you can
   review it and apply it yourself with `git apply`.
-- Providers are tried in order (Gemini primary, Gemini fallback, Groq); an
+- Providers are tried in the same order as triage (default Ollama, Groq,
+  Gemini); an
   invalid answer moves to the next provider.
 
 A verified AI fix is evidence, not proof, and always needs human review.

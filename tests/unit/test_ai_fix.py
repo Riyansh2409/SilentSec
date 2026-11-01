@@ -342,13 +342,18 @@ def test_empty_adapter_answers_are_errors():
 
 
 def test_default_providers_follow_environment(monkeypatch):
+    monkeypatch.delenv("SILENTSEC_AI_PROVIDERS", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
-    assert build_default_fix_providers() == []
+    names = [type(provider).__name__ for provider in build_default_fix_providers()]
+    assert names == ["OllamaFixProvider"]
 
     monkeypatch.setenv("GROQ_API_KEY", "test")
     providers = build_default_fix_providers()
-    assert [type(provider).__name__ for provider in providers] == ["GroqFixProvider"]
+    assert [type(provider).__name__ for provider in providers] == [
+        "OllamaFixProvider",
+        "GroqFixProvider",
+    ]
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")

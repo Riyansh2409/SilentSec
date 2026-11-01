@@ -17,12 +17,13 @@ export function exposureOf(finding) {
     path:Array.isArray(finding.exposure_path)?finding.exposure_path:[],
     factor:typeof finding.exposure_factor==='number'?finding.exposure_factor:null};
 }
+export function aiHasExternal(config){return (config?.ai_providers||[]).some(p=>p.scope!=='local')}
 export function aiDisclosure(config) {
   if(config?.ai_configuration_error)return 'AI configuration error: '+config.ai_configuration_error;
   const providers=config?.ai_providers||[];
   if(!providers.length)return 'AI is not configured. Set SILENTSEC_AI_PROVIDERS=ollama for local AI, or configure a cloud provider, then restart.';
   const chain=providers.map(p=>p.name+' / '+p.model+' ('+p.scope+')').join(' → ');
-  return 'Configured order: '+chain+'. '+(config.ai_local_only?'Only local providers are configured.':'This chain includes external providers: sanitized source context may leave this computer, including on fallback.')+' Availability is checked when used.';
+  return 'Configured order: '+chain+'. '+(config.ai_local_only?'Only local providers are configured.':'Warning: this chain includes external providers ('+providers.filter(p=>p.scope!=='local').map(p=>p.name).join(', ')+'). Sanitized source context may leave this computer, including on fallback. For local-only AI set SILENTSEC_AI_PROVIDERS=ollama and restart.')+' Availability is checked when used.';
 }
 
 export function scoredView(item) {
