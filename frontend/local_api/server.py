@@ -41,6 +41,14 @@ class InputError(ValueError):
     pass
 
 
+def clean_path(value: str) -> str:
+    """Strip whitespace and one pair of matching quotes ("Copy as path" on Windows)."""
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        value = value[1:-1].strip()
+    return value
+
+
 def validate_request(body: dict) -> tuple[str, dict]:
     if not isinstance(body, dict) or body.get("operation") not in OPERATIONS:
         raise InputError("Choose a supported operation.")
@@ -138,11 +146,12 @@ def validate_request(body: dict) -> tuple[str, dict]:
         if args.get("fail_on", "high") not in {"critical", "high", "medium", "low", "info"}:
             raise InputError("Invalid gate severity threshold.")
     path = args.get("repo_path")
-    if not isinstance(path, str) or not path.strip() or len(path) > 4096:
+    if not isinstance(path, str) or len(path) > 4096 or not clean_path(path):
         raise InputError("Enter a local repository folder path.")
+    path = clean_path(path)
     if path.startswith(("\\\\", "//")) or "://" in path:
         raise InputError("Use a folder on this computer, not a URL or network share.")
-    root = Path(path.strip()).expanduser().resolve()
+    root = Path(path).expanduser().resolve()
     if not root.is_dir():
         raise InputError("The repository folder does not exist on this computer.")
     args["repo_path"] = str(root)

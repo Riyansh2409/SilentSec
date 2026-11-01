@@ -1,4 +1,4 @@
-import {scanIncomplete,reintroducedChanges,returnedCount,findingTags,mergeInfo,exposureOf,aiDisclosure,scoredView,nativeIssueView,triageAttributionText} from './data.js';
+import {scanIncomplete,reintroducedChanges,returnedCount,findingTags,mergeInfo,exposureOf,aiDisclosure,scoredView,nativeIssueView,triageAttributionText,cleanRepoPath} from './data.js';
 import * as api from './api.js';
 import {debtViews} from './debt-views.js';
 
@@ -27,8 +27,8 @@ function field(id,label,type='number',value=180,min=1,max=600){const wrapper=el(
 function select(id,label,options){const wrapper=el('div','field'),lab=el('label','',label),input=el('select');lab.htmlFor=id;input.id=id;for(const [value,title]of options){const o=el('option','',title);o.value=value;input.append(o)}wrapper.append(lab,input);return{wrapper,input}}
 function checked(id){return !!$(id)?.checked}
 function numeric(id,fallback){return $(id)?Number($(id).value):fallback}
-function repo(){const value=$('repo-path').value.trim();if(!value){$('repo-path').focus();throw new Error('Enter your local repository folder first.')}return value}
-function sameRepo(path){return String(path).replaceAll('\\','/').replace(/\/$/,'').toLowerCase()===String($('repo-path').value.trim()).replaceAll('\\','/').replace(/\/$/,'').toLowerCase()}
+function repo(){const value=cleanRepoPath($('repo-path').value);$('repo-path').value=value;if(!value){$('repo-path').focus();throw new Error('Enter your local repository folder first.')}return value}
+function sameRepo(path){return String(path).replaceAll('\\','/').replace(/\/$/,'').toLowerCase()===cleanRepoPath($('repo-path').value).replaceAll('\\','/').replace(/\/$/,'').toLowerCase()}
 function current(kind){const result=state.results[kind];return result&&sameRepo(result.job.repo_path)?result:null}
 function operationButton(label,handler,operation){const b=button(label,handler,'');b.dataset.operation=operation;updateButton(b);return b}
 function updateButton(b){b.disabled=(b.dataset.operation==='fix'&&!state.health?.backend?.ai_configured)||!!state.busy||!state.health?.backend_ready||!state.health?.backend?.capabilities?.[b.dataset.operation]}

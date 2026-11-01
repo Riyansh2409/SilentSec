@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {returnedCount,reintroducedChanges,scanIncomplete,findingTags,mergeInfo} from '../web/data.js';
+import {cleanRepoPath} from '../web/data.js';
 import {exposureOf,aiDisclosure,scoredView,nativeIssueView,triageAttributionText} from '../web/data.js';
 const point={introduced:[{reintroduced:true,previously_fixed_in:'abc'},{reintroduced:false}]};
 assert.equal(returnedCount([point]),1);
@@ -24,3 +25,8 @@ assert.match(triageAttributionText({provider:'groq',model:'cloud',local:false,ca
 assert.match(triageAttributionText({provider:null,model:null,local:false,cached:true}),/provider and model are unknown/);
 assert.equal(triageAttributionText('ollama legacy'),'Answered by: ollama legacy');
 assert.match(triageAttributionText(undefined),/not recorded/);
+assert.equal(cleanRepoPath('  "C:\\Users\\me\\shop"  '),'C:\\Users\\me\\shop');
+assert.equal(cleanRepoPath("'C:/demo/shop'"),'C:/demo/shop');
+assert.equal(cleanRepoPath('"C:/demo/shop'),'"C:/demo/shop');
+assert.equal(cleanRepoPath('C:/demo/shop'),'C:/demo/shop');
+assert.equal(cleanRepoPath('""'),'');
