@@ -81,6 +81,15 @@ def test_registered_repositories_are_tenant_scoped(platform, tmp_path):
     assert client.get("/api/v1/billing/usage").json()["credits_left"] == 30
 
 
+def test_quoted_registered_path_is_accepted(platform, tmp_path):
+    # Windows "Copy as path" wraps the folder in quotes; the registered root
+    # must still match (other tenants and other folders stay refused).
+    client, root, _ = registered(platform, tmp_path)
+    response = submit(client, "scan", {"repo_path": f'"{root}"'}, "quoted-path-001")
+    assert response.status_code == 202, response.text
+    assert submit(client, "scan", {"repo_path": f'"{root.parent}"'}).status_code == 403
+
+
 def test_original_scan_reservation_idempotency_cancel_and_idor(platform, tmp_path):
     client, root, _ = registered(platform, tmp_path)
     _, factory, account, settings = platform

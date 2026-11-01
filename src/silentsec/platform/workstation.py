@@ -51,7 +51,12 @@ def adapter_modules():
 def canonical(value):
     # Compare strings before probing the filesystem. No user-supplied path is
     # resolved until ownership of the exact registered root is established.
-    return os.path.normcase(os.path.normpath(str(value).strip()))
+    # One matching pair of quotes is dropped, as Windows "Copy as path" adds them
+    # (same rule as the standalone server's clean_path).
+    text = str(value).strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        text = text[1:-1].strip()
+    return os.path.normcase(os.path.normpath(text))
 
 
 def quota_limits(limits):
