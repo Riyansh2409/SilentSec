@@ -537,6 +537,21 @@ class Handler(BaseHTTPRequestHandler):
             self.send(400, {"error": message})
 
 
+def load_backend_env(backend: Path) -> None:
+    """Load the backend checkout's .env (names only, never values; existing vars win)."""
+    source = str(backend / "src")
+    if source not in sys.path:
+        sys.path.insert(0, source)
+    try:
+        from silentsec.envfile import ENV_FILE_VARIABLE, load_env_file
+    except ImportError:
+        return
+    explicit = os.environ.get(ENV_FILE_VARIABLE, "").strip()
+    names = load_env_file(Path(explicit).expanduser() if explicit else backend / ".env")
+    if names:
+        print(f"Loaded {len(names)} setting(s) from .env: {', '.join(sorted(names))}", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run the SilentSec local frontend and API.")
     parser.add_argument("--port", type=int, default=8767)
@@ -552,6 +567,7 @@ def main():
     except (ValueError, OSError) as exc:
         parser.error(str(exc))
     config["backend_path"] = str(backend.resolve())
+    load_backend_env(backend.resolve())
     config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     server.state = State(backend.resolve(), ROOT / ".data")

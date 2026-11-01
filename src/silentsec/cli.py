@@ -8,6 +8,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from silentsec.envfile import load_env_file
 from silentsec.gate import GateFinding, GatePolicy, GateReport, GateVerdict, run_gate
 from silentsec.history import HistoryError, TimelineReport, build_timeline
 from silentsec.remediation import FindingSummary, FixVerdict, FixVerificationReport, verify_fix
@@ -805,6 +806,7 @@ def _run_serve(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    load_env_file()
     parser = _build_parser()
     args = parser.parse_args(argv)
 
