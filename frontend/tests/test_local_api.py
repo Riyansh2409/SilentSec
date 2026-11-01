@@ -36,6 +36,23 @@ class RequestTests(unittest.TestCase):
             with self.subTest(extras=extras), self.assertRaises(InputError):
                 validate_request({"operation": "scan", "args": {"repo_path": self.path, **extras}})
 
+    def test_quoted_windows_paths_are_accepted(self):
+        expected = str(Path(self.path).resolve())
+        for raw in (f'"{self.path}"', f"'{self.path}'", f'  "{self.path}"  ', f" {self.path} "):
+            with self.subTest(raw=raw):
+                _, args = validate_request({"operation": "scan", "args": {"repo_path": raw}})
+                self.assertEqual(args["repo_path"], expected)
+
+    def test_unbalanced_or_empty_quotes_are_rejected(self):
+        for raw in (f'"{self.path}', '""', "''", '"  "'):
+            with self.subTest(raw=raw), self.assertRaises(InputError):
+                validate_request({"operation": "scan", "args": {"repo_path": raw}})
+
+    def test_quoted_network_paths_are_still_rejected(self):
+        for raw in ('"\\\\server\\share"', "'//server/share'", '"https://example.com/x"'):
+            with self.subTest(raw=raw), self.assertRaises(InputError):
+                validate_request({"operation": "scan", "args": {"repo_path": raw}})
+
     def test_network_paths_are_not_local_inputs(self):
         for path in ("https://github.com/example/repo", "\\\\server\\share", "//server/share"):
             with self.assertRaises(InputError):

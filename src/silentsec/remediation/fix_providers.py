@@ -8,7 +8,7 @@ import os
 from typing import Any, Protocol
 
 from silentsec.triage.ollama_provider import OllamaClient
-from silentsec.triage.providers import configured_provider_order
+from silentsec.triage.providers import DEFAULT_PROVIDER_ORDER, configured_provider_order
 
 FIX_SYSTEM_PROMPT = """
 You are SilentSec, an assistant that proposes minimal security fixes.
@@ -163,9 +163,9 @@ _FIX_BUILDERS = {
 def build_default_fix_providers() -> list[FixProvider]:
     """Configure fix providers from the same environment variables as triage.
 
-    SILENTSEC_AI_PROVIDERS sets the order; without it, Gemini then Groq for
-    configured keys (Ollama only when listed). Raises AIProviderConfigError
+    SILENTSEC_AI_PROVIDERS sets the order; without it, the triage default
+    (local Ollama first, then Groq and Gemini for configured keys). Raises AIProviderConfigError
     for an unknown name or a disallowed OLLAMA_HOST.
     """
-    order = configured_provider_order() or ("gemini", "groq")
+    order = configured_provider_order() or DEFAULT_PROVIDER_ORDER
     return [provider for name in order for provider in _FIX_BUILDERS[name]()]

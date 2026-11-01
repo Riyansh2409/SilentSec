@@ -466,6 +466,192 @@ def _duplicate_findings(parsed: dict[str, ast.AST]) -> list[Finding]:
     return findings
 
 
+def _handler_findings(node: ast.ExceptHandler, relative_path: str) -> list[Finding]:
+    """SSEC-ARCH-001 (broad handler) and SSEC-ARCH-002 (swallowed exception)."""
+    caught = ast.unparse(node.type) if node.type is not None else "bare except"
+    summary = _handler_body_summary(node)
+    findings = []
+    if _is_broad_exception(node):
+        findings.append(
+            _make_finding(
+                file_path=relative_path,
+                rule_id="SSEC-ARCH-001",
+                start_line=node.lineno,
+                end_line=node.end_lineno,
+                category=FindingCategory.MAINTAINABILITY,
+                severity=Severity.LOW,
+                message=f"Broad exception handler catches {caught}; handler actions: {summary}.",
+                confidence=0.9,
+            )
+        )
+    if _is_swallowed_exception(node):
+        findings.append(
+            _make_finding(
+                file_path=relative_path,
+                rule_id="SSEC-ARCH-002",
+                start_line=node.lineno,
+                end_line=node.end_lineno,
+                category=FindingCategory.MAINTAINABILITY,
+                severity=Severity.MEDIUM,
+                message=(
+                    "Heuristic: exception handler appears to suppress "
+                    "the exception without logging or re-raising; "
+                    f"body: {summary}."
+                ),
+                confidence=0.6,
+            )
+        )
+    return findings
+
+
+def _complexity_finding(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    relative_path: str,
+    complexity_low: int,
+    complexity_medium: int,
+) -> Finding | None:
+    """SSEC-ARCH-003 when a function's estimated complexity is above the threshold."""
+    complexity = _complexity(node)
+    if complexity <= complexity_low:
+        return None
+    severity = Severity.MEDIUM if complexity > complexity_medium else Severity.LOW
+    return _make_finding(
+        file_path=relative_path,
+        rule_id="SSEC-ARCH-003",
+        start_line=node.lineno,
+        end_line=node.end_lineno,
+        category=FindingCategory.MAINTAINABILITY,
+        severity=severity,
+        message=(
+            f"Function {node.name!r} has estimated cyclomatic "
+            f"complexity {complexity}; threshold is "
+            f"{complexity_low} (medium above {complexity_medium})."
+        ),
+        confidence=0.9,
+    )
+
+
+def _tree_findings(
+    tree: ast.AST, relative_path: str, complexity_low: int, complexity_medium: int
+) -> list[Finding]:
+    findings: list[Finding] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ExceptHandler):
+            findings.extend(_handler_findings(node, relative_path))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            finding = _complexity_finding(node, relative_path, complexity_low, complexity_medium)
+            if finding is not None:
+                findings.append(finding)
+    return findings
+
+
+class _FileScan:
+    """Per-file results collected before the cross-file checks."""
+
+    def __init__(self) -> None:
+        self.findings: list[Finding] = []
+        self.errors: list[str] = []
+        self.parsed: dict[str, ast.AST] = {}
+        self.skipped_oversized = 0
+        self.skipped_binary = 0
+        self.timed_out = False
+
+
+def _scan_files(
+    root: Path, deadline: float, complexity_low: int, complexity_medium: int
+) -> _FileScan:
+    scan = _FileScan()
+    for path in _discover_python_files(root):
+        if perf_counter() >= deadline:
+            scan.errors.append("Architecture analysis timed out before all files were analyzed.")
+            scan.timed_out = True
+            break
+        relative_path = path.relative_to(root).as_posix()
+        try:
+            source = _read_python_file(path, root)
+            tree = ast.parse(source, filename=relative_path)
+        except _SkippedPythonFile as exc:
+            if "exceeds 256 KB limit" in str(exc):
+                scan.skipped_oversized += 1
+            elif "appears to be binary" in str(exc):
+                scan.skipped_binary += 1
+            continue
+        except (OSError, UnicodeError, SyntaxError, ValueError) as exc:
+            scan.errors.append(
+                f"{relative_path}: source could not be analyzed ({type(exc).__name__})."
+            )
+            continue
+
+        scan.parsed[relative_path] = tree
+        maintainability = _maintainability_finding(relative_path, source)
+        if maintainability is not None:
+            scan.findings.append(maintainability)
+        scan.findings.extend(_tree_findings(tree, relative_path, complexity_low, complexity_medium))
+    return scan
+
+
+def _cycle_findings(root: Path, parsed: dict[str, ast.AST]) -> list[Finding]:
+    """SSEC-ARCH-004: one finding per circular import component."""
+    import_result = analyze_python_imports(root)
+    findings: list[Finding] = []
+    for component in _collect_module_sccs(import_result.dependencies):
+        cycle_path = _shortest_cycle_path(component, import_result.dependencies)
+        cycle_source, cycle_target = cycle_path[-2], cycle_path[-1]
+        matching_dependencies = sorted(
+            (
+                dependency
+                for dependency in import_result.dependencies
+                if dependency.source_module == cycle_source
+                and dependency.imported_module == cycle_target
+                and dependency.source_file in parsed
+            ),
+            key=lambda dependency: (dependency.source_file, dependency.line_number),
+        )
+        if not matching_dependencies:
+            continue
+        dependency = matching_dependencies[0]
+        findings.append(
+            _make_finding(
+                file_path=dependency.source_file,
+                rule_id="SSEC-ARCH-004",
+                start_line=dependency.line_number,
+                end_line=dependency.line_number,
+                category=FindingCategory.ARCHITECTURE,
+                severity=Severity.MEDIUM,
+                message=(
+                    "Circular import detected among modules: "
+                    f"{', '.join(component)}. "
+                    "Example cycle: " + " -> ".join(cycle_path)
+                ),
+                confidence=0.9,
+            )
+        )
+    return findings
+
+
+def _informational_notes(scan: _FileScan) -> list[str]:
+    notes = []
+    if mi_visit is None:
+        notes.append(
+            "Informational: Radon is not installed, so the maintainability index "
+            "(SSEC-ARCH-006) was not checked."
+        )
+    if scan.skipped_oversized or scan.skipped_binary:
+        notes.append(
+            "Informational: skipped "
+            f"{scan.skipped_oversized} oversized Python file(s) and "
+            f"{scan.skipped_binary} binary Python file(s)."
+        )
+    return notes
+
+
+def _out_of_time(deadline: float, step: str, errors: list[str]) -> bool:
+    if perf_counter() < deadline:
+        return False
+    errors.append(f"Architecture analysis timed out before {step}.")
+    return True
+
+
 def run_architecture_analyzer(
     repo_path: str | Path,
     timeout_seconds: int = 180,
@@ -490,202 +676,23 @@ def run_architecture_analyzer(
     if complexity_low <= 0 or complexity_medium <= complexity_low:
         raise ValueError("Complexity thresholds must be positive and increasing.")
 
-    findings: list[Finding] = []
-    errors: list[str] = []
-    skipped_oversized_files = 0
-    skipped_binary_files = 0
-    parsed: dict[str, ast.AST] = {}
     deadline = started + timeout_seconds
-    timed_out = False
+    scan = _scan_files(root, deadline, complexity_low, complexity_medium)
+    findings, errors = scan.findings, scan.errors
 
-    for path in _discover_python_files(root):
-        if perf_counter() >= deadline:
-            errors.append(
-                "Architecture analysis timed out before all files were analyzed."
-            )
-            timed_out = True
-            break
-
-        relative_path = path.relative_to(root).as_posix()
-
-        try:
-            source = _read_python_file(path, root)
-            tree = ast.parse(source, filename=relative_path)
-        except _SkippedPythonFile as exc:
-            if "exceeds 256 KB limit" in str(exc):
-                skipped_oversized_files += 1
-            elif "appears to be binary" in str(exc):
-                skipped_binary_files += 1
-            continue
-        except (OSError, UnicodeError, SyntaxError, ValueError) as exc:
-            errors.append(
-                f"{relative_path}: source could not be analyzed ({type(exc).__name__})."
-            )
-            continue
-
-        parsed[relative_path] = tree
-        maintainability = _maintainability_finding(relative_path, source)
-        if maintainability is not None:
-            findings.append(maintainability)
-
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ExceptHandler):
-                caught = (
-                    ast.unparse(node.type)
-                    if node.type is not None
-                    else "bare except"
-                )
-                summary = _handler_body_summary(node)
-
-                if _is_broad_exception(node):
-                    findings.append(
-                        _make_finding(
-                            file_path=relative_path,
-                            rule_id="SSEC-ARCH-001",
-                            start_line=node.lineno,
-                            end_line=node.end_lineno,
-                            category=FindingCategory.MAINTAINABILITY,
-                            severity=Severity.LOW,
-                            message=(
-                                f"Broad exception handler catches {caught}; "
-                                f"handler actions: {summary}."
-                            ),
-                            confidence=0.9,
-                        )
-                    )
-
-                if _is_swallowed_exception(node):
-                    findings.append(
-                        _make_finding(
-                            file_path=relative_path,
-                            rule_id="SSEC-ARCH-002",
-                            start_line=node.lineno,
-                            end_line=node.end_lineno,
-                            category=FindingCategory.MAINTAINABILITY,
-                            severity=Severity.MEDIUM,
-                            message=(
-                                "Heuristic: exception handler appears to suppress "
-                                "the exception without logging or re-raising; "
-                                f"body: {summary}."
-                            ),
-                            confidence=0.6,
-                        )
-                    )
-
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                complexity = _complexity(node)
-                if complexity > complexity_low:
-                    severity = (
-                        Severity.MEDIUM
-                        if complexity > complexity_medium
-                        else Severity.LOW
-                    )
-                    findings.append(
-                        _make_finding(
-                            file_path=relative_path,
-                            rule_id="SSEC-ARCH-003",
-                            start_line=node.lineno,
-                            end_line=node.end_lineno,
-                            category=FindingCategory.MAINTAINABILITY,
-                            severity=severity,
-                            message=(
-                                f"Function {node.name!r} has estimated cyclomatic "
-                                f"complexity {complexity}; threshold is "
-                                f"{complexity_low} (medium above {complexity_medium})."
-                            ),
-                            confidence=0.9,
-                        )
-                    )
-
-    if not timed_out and perf_counter() >= deadline:
-        errors.append(
-            "Architecture analysis timed out before import graph analysis."
-        )
-        timed_out = True
-
+    timed_out = scan.timed_out or _out_of_time(deadline, "import graph analysis", errors)
     if not timed_out:
         try:
-            import_result = analyze_python_imports(root)
-            components = _collect_module_sccs(import_result.dependencies)
-
-            for component in components:
-                cycle_path = _shortest_cycle_path(
-                    component,
-                    import_result.dependencies,
-                )
-                cycle_source = cycle_path[-2]
-                cycle_target = cycle_path[-1]
-                matching_dependencies = sorted(
-                    (
-                        dependency
-                        for dependency in import_result.dependencies
-                        if dependency.source_module == cycle_source
-                        and dependency.imported_module == cycle_target
-                        and dependency.source_file in parsed
-                    ),
-                    key=lambda dependency: (
-                        dependency.source_file,
-                        dependency.line_number,
-                    ),
-                )
-
-                if not matching_dependencies:
-                    continue
-
-                dependency = matching_dependencies[0]
-                cycle_path = _shortest_cycle_path(
-                    component,
-                    import_result.dependencies,
-                )
-
-                findings.append(
-                    _make_finding(
-                        file_path=dependency.source_file,
-                        rule_id="SSEC-ARCH-004",
-                        start_line=dependency.line_number,
-                        end_line=dependency.line_number,
-                        category=FindingCategory.ARCHITECTURE,
-                        severity=Severity.MEDIUM,
-                        message=(
-                            "Circular import detected among modules: "
-                            f"{', '.join(component)}. "
-                            "Example cycle: " + " -> ".join(cycle_path)
-                        ),
-                        confidence=0.9,
-                    )
-                )
+            findings.extend(_cycle_findings(root, scan.parsed))
         except (OSError, ValueError) as exc:
-            errors.append(
-                f"Import graph could not be analyzed ({type(exc).__name__})."
-            )
-
-    if not timed_out and perf_counter() >= deadline:
-        errors.append("Architecture analysis timed out before duplicate detection.")
-        timed_out = True
-
+            errors.append(f"Import graph could not be analyzed ({type(exc).__name__}).")
+        timed_out = _out_of_time(deadline, "duplicate detection", errors)
     if not timed_out:
-        findings.extend(_duplicate_findings(parsed))
+        findings.extend(_duplicate_findings(scan.parsed))
 
     findings.sort(key=lambda item: (item.file_path, item.start_line, item.rule_id))
-
-    status = (
-        ScannerStatus.PARTIAL
-        if errors or timed_out
-        else ScannerStatus.SUCCESS
-    )
-
-    if mi_visit is None:
-        errors.append(
-            "Informational: Radon is not installed, so the maintainability index "
-            "(SSEC-ARCH-006) was not checked."
-        )
-
-    if skipped_oversized_files or skipped_binary_files:
-        errors.append(
-            "Informational: skipped "
-            f"{skipped_oversized_files} oversized Python file(s) and "
-            f"{skipped_binary_files} binary Python file(s)."
-        )
+    status = ScannerStatus.PARTIAL if errors or timed_out else ScannerStatus.SUCCESS
+    errors.extend(_informational_notes(scan))
 
     return ScannerRunResult(
         scanner="architecture",

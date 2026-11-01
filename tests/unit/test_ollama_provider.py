@@ -233,14 +233,17 @@ def test_unknown_or_empty_names_are_a_clear_error(value, monkeypatch):
         configured_provider_order()
 
 
-def test_default_order_is_unchanged_and_never_includes_ollama(monkeypatch):
-    assert build_default_providers() == []
+def test_default_order_is_local_first(monkeypatch):
+    monkeypatch.delenv("SILENTSEC_AI_PROVIDERS", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    assert [name for name, _ in build_default_providers()] == ["ollama"]
 
     monkeypatch.setenv("GEMINI_API_KEY", "g-key")
     monkeypatch.setenv("GROQ_API_KEY", "q-key")
     names = [name for name, _ in build_default_providers()]
 
-    assert names == ["gemini-primary", "gemini-fallback", "groq"]
+    assert names == ["ollama", "groq", "gemini-primary", "gemini-fallback"]
 
 
 def test_listed_order_is_used_and_missing_keys_are_skipped(monkeypatch):

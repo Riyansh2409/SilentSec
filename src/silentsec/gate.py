@@ -32,6 +32,7 @@ from silentsec.remediation.verify import SEVERITY_RANK
 from silentsec.scanners.results import ScannerStatus
 from silentsec.scanners.scanner_service import RepositoryScanResult, scan_repository
 from silentsec.schemas import Finding, FindingCategory, Severity
+from silentsec.scope import IGNORE_FILE_NAME
 from silentsec.scoring.correlation import correlate_findings
 from silentsec.verification import VerificationStatus, compare_findings
 
@@ -60,6 +61,9 @@ class GateFinding(BaseModel):
 class GatePolicy(BaseModel):
     fail_on: Severity = Severity.HIGH
     fail_on_architecture: bool = False
+    # Findings in test/sample code (tests/, fixtures/, examples/ ...) only
+    # count when this is set.
+    include_tests: bool = False
 
 
 class GateReport(BaseModel):
@@ -127,16 +131,45 @@ def _resolve(repo: Path, ref: str) -> str:
         raise HistoryError(f"Unknown commit or branch: {ref}") from exc
 
 
-def _scan_commit(repo: Path, sha: str, scan: ScanFunction, timeout_seconds: int):
+def _scan_commit(
+    repo: Path,
+    sha: str,
+    scan: ScanFunction,
+    timeout_seconds: int,
+    ignore_text: str | None = None,
+    use_ignore_text: bool = False,
+):
+    """Scan one commit. Returns (result, skipped_entries, its .silentsecignore text).
+
+    With ``use_ignore_text`` the snapshot's .silentsecignore is replaced by
+    ``ignore_text`` (None removes it), so a change cannot hide its own
+    findings by editing the ignore file.
+    """
     workspace = Path(tempfile.mkdtemp(prefix="silentsec-gate-"))
     try:
         snapshot = workspace / "repo"
         snapshot.mkdir()
         skipped = export_commit(repo, sha, snapshot)
+        ignore_path = snapshot / IGNORE_FILE_NAME
+        own_text = (
+            ignore_path.read_text(encoding="utf-8-sig", errors="replace")
+            if ignore_path.is_file() and not ignore_path.is_symlink()
+            else None
+        )
+        if use_ignore_text:
+            ignore_path.unlink(missing_ok=True)
+            if ignore_text is not None:
+                ignore_path.write_text(ignore_text, encoding="utf-8")
         result = scan(snapshot, timeout_seconds=timeout_seconds, enable_ai_triage=False)
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
-    return result, skipped
+    return result, skipped, own_text
+
+
+def _gated_findings(result: RepositoryScanResult, policy: GatePolicy) -> list[Finding]:
+    """Findings the gate compares: test/sample code only with include_tests."""
+    test_findings = getattr(result, "test_findings", None) or []
+    return list(result.findings) + (list(test_findings) if policy.include_tests else [])
 
 
 def run_gate(
@@ -195,8 +228,18 @@ def run_gate(
         report.reasons.append(f"{head} has no changes compared with {base}.")
         return report
 
-    base_result, skipped_base = _scan_commit(top_level, base_sha, scan, timeout_seconds)
-    head_result, skipped_head = _scan_commit(top_level, head_sha, scan, timeout_seconds)
+    base_result, skipped_base, base_ignore = _scan_commit(
+        top_level, base_sha, scan, timeout_seconds
+    )
+    # The head is scanned with the base's .silentsecignore.
+    head_result, skipped_head, head_ignore = _scan_commit(
+        top_level, head_sha, scan, timeout_seconds, base_ignore, use_ignore_text=True
+    )
+    if head_ignore != base_ignore:
+        report.limitations.append(
+            f"{head} changes {IGNORE_FILE_NAME}; the version from {base} was used for both "
+            "scans, so the change cannot hide its own findings."
+        )
     if skipped_base or skipped_head:
         report.limitations.append(
             "Some unsafe archive entries (such as symlinks pointing outside the "
@@ -217,7 +260,22 @@ def run_gate(
         )
         return report
 
-    comparison = compare_findings(base_result.findings, head_result.findings, scan_complete=True)
+    comparison = compare_findings(
+        _gated_findings(base_result, policy),
+        _gated_findings(head_result, policy),
+        scan_complete=True,
+    )
+    if not policy.include_tests:
+        test_new = compare_findings(
+            getattr(base_result, "test_findings", None) or [],
+            getattr(head_result, "test_findings", None) or [],
+            scan_complete=True,
+        ).new_findings
+        if test_new:
+            report.limitations.append(
+                f"{len(test_new)} new finding(s) in test or sample code were not counted "
+                "(use --include-tests to gate on them)."
+            )
     threshold = SEVERITY_RANK[policy.fail_on]
 
     blocking_findings: list[Finding] = []

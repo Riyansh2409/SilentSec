@@ -180,8 +180,81 @@ def _cwe(vulnerabilities: list[dict[str, Any]]) -> str | None:
     return None
 
 
+DEPENDENCY_RULE_ID = "vulnerable-dependency"
+SEVERITY_ORDER = [Severity.INFO, Severity.LOW, Severity.MEDIUM, Severity.HIGH, Severity.CRITICAL]
+MAX_LISTED_IDS = 30
+
+
+def _group_details(group: dict[str, Any], by_id: dict[str, dict[str, Any]], name: str):
+    """(preferred id, severity, summary, fixed versions, cwe) or None if withdrawn/empty."""
+    ids = [str(item) for item in group.get("ids") or [] if item]
+    if not ids:
+        return None
+    members = [by_id[item] for item in ids if item in by_id]
+    if members and all(member.get("withdrawn") for member in members):
+        return None
+    summary = next(
+        (str(member["summary"]) for member in members if member.get("summary")),
+        "Known vulnerability",
+    )
+    return (
+        _preferred_id(ids),
+        _severity(group, members),
+        summary.rstrip("."),
+        _fixed_versions(members, name),
+        _cwe(members),
+    )
+
+
+def _package_finding(
+    *, name: str, version: str, ecosystem: str, file_path: str, line: int, advisories: list
+) -> Finding:
+    """One finding per package and version, carrying every advisory id."""
+    advisories = sorted(advisories, key=lambda a: (-SEVERITY_ORDER.index(a[1]), a[0]))
+    top_id, top_severity, top_summary, _fixed, top_cwe = advisories[0]
+    ids = [advisory[0] for advisory in advisories]
+    # The lowest fixed version of each advisory; upgrading to the highest of
+    # those fixes all of them that have a fix.
+    per_advisory = [advisory[3][0] for advisory in advisories if advisory[3]]
+    unfixed = len(advisories) - len(per_advisory)
+    if per_advisory:
+        fix_text = f" Upgrade to {max(per_advisory, key=_version_key)} or later."
+        if unfixed:
+            fix_text += f" {unfixed} advisory(ies) have no fixed version yet."
+    else:
+        fix_text = " No fixed version is listed yet."
+    count = len(advisories)
+    listed = ", ".join(ids[:MAX_LISTED_IDS]) + (
+        f" and {count - MAX_LISTED_IDS} more" if count > MAX_LISTED_IDS else ""
+    )
+    noun = "vulnerability" if count == 1 else "vulnerabilities"
+    return Finding(
+        fingerprint=create_fingerprint(
+            TOOL_NAME, DEPENDENCY_RULE_ID, f"{file_path}#{_canonical(name)}", 1
+        ),
+        tool=TOOL_NAME,
+        rule_id=DEPENDENCY_RULE_ID,
+        file_path=file_path,
+        start_line=line,
+        category=FindingCategory.SECURITY,
+        severity=top_severity,
+        message=(
+            f"Dependency {name} {version} ({ecosystem}) has {count} known {noun}, "
+            f"highest {top_severity.value.upper()}: {top_id} {top_summary}.{fix_text} "
+            f"Advisories: {listed}."
+        ),
+        cwe_id=top_cwe,
+        confidence=0.9,
+        advisory_ids=ids,
+    )
+
+
 def parse_osv_report(payload: dict[str, Any], root: Path) -> tuple[list[Finding], list[str]]:
-    """Normalize OSV-Scanner JSON into findings, one per vulnerability group."""
+    """Normalize OSV-Scanner JSON into findings, one per package and version.
+
+    A package with many advisories is one issue (fix: upgrade it), not one
+    issue per advisory; every advisory id is kept in ``advisory_ids``.
+    """
     findings: list[Finding] = []
     errors: list[str] = []
     results = payload.get("results")
@@ -206,54 +279,23 @@ def parse_osv_report(payload: dict[str, Any], root: Path) -> tuple[list[Finding]
             groups = entry.get("groups") or [
                 {"ids": [vulnerability_id]} for vulnerability_id in by_id
             ]
-            line = _declaration_line(root / file_path, name)
-
-            for group in groups:
-                ids = [str(item) for item in group.get("ids") or [] if item]
-                if not ids:
-                    continue
-                members = [by_id[item] for item in ids if item in by_id]
-                if members and all(member.get("withdrawn") for member in members):
-                    continue
-                rule_id = _preferred_id(ids)
-                aliases = sorted(
-                    (
-                        {str(alias) for alias in group.get("aliases") or [] if alias}
-                        | {str(a) for member in members for a in member.get("aliases") or []}
-                        | set(ids)
-                    )
-                    - {rule_id}
+            advisories = [
+                details
+                for group in groups
+                if (details := _group_details(group, by_id, name)) is not None
+            ]
+            if not advisories:
+                continue
+            findings.append(
+                _package_finding(
+                    name=name,
+                    version=version,
+                    ecosystem=ecosystem,
+                    file_path=file_path,
+                    line=_declaration_line(root / file_path, name),
+                    advisories=advisories,
                 )
-                summary = next(
-                    (str(member["summary"]) for member in members if member.get("summary")),
-                    "Known vulnerability",
-                )
-                fixed = _fixed_versions(members, name)
-                fix_text = (
-                    f" Upgrade to {fixed[0]} or later."
-                    if fixed
-                    else " No fixed version is listed yet."
-                )
-                also = f" Also known as {', '.join(aliases[:4])}." if aliases else ""
-                findings.append(
-                    Finding(
-                        fingerprint=create_fingerprint(
-                            TOOL_NAME, rule_id, f"{file_path}#{_canonical(name)}", line
-                        ),
-                        tool=TOOL_NAME,
-                        rule_id=rule_id,
-                        file_path=file_path,
-                        start_line=line,
-                        category=FindingCategory.SECURITY,
-                        severity=_severity(group, members),
-                        message=(
-                            f"Dependency {name} {version} ({ecosystem}) has a known "
-                            f"vulnerability {rule_id}: {summary.rstrip('.')}.{fix_text}{also}"
-                        ),
-                        cwe_id=_cwe(members),
-                        confidence=0.9,
-                    )
-                )
+            )
     return findings, errors
 
 

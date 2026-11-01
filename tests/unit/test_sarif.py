@@ -191,3 +191,38 @@ def test_cli_writes_sarif_for_scan_and_gate(tmp_path: Path):
 
     assert json.loads(scan_out.read_text(encoding="utf-8"))["version"] == "2.1.0"
     assert len(json.loads(gate_out.read_text(encoding="utf-8"))["runs"][0]["results"]) == 2
+
+
+def test_grouped_dependency_is_one_sarif_result_listing_all_advisories():
+    from silentsec.scanners.osv_runner import parse_osv_report
+
+    vulnerabilities = [{"id": f"GHSA-{n:04d}-x"} for n in range(3)]
+    payload = {
+        "results": [
+            {
+                "source": {"path": "requirements.txt"},
+                "packages": [
+                    {
+                        "package": {"name": "flask", "version": "0.12.2", "ecosystem": "PyPI"},
+                        "vulnerabilities": vulnerabilities,
+                    }
+                ],
+            }
+        ]
+    }
+    findings, _ = parse_osv_report(payload, Path("."))
+    result = RepositoryScanResult(
+        repo_path=".",
+        status=ScannerStatus.SUCCESS,
+        findings=findings,
+        duration_seconds=0,
+        security_debt=score_findings(findings),
+        security_debt_complete=True,
+    )
+
+    document = scan_to_sarif(result)
+    validate(document)
+    results = document["runs"][0]["results"]
+    assert len(results) == 1
+    text = results[0]["message"]["text"]
+    assert all(f"GHSA-{n:04d}-x" in text for n in range(3))

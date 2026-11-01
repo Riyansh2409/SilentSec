@@ -15,6 +15,10 @@ class GateValidationTests(unittest.TestCase):
             base = {"operation": "gate", "args": {"repo_path": folder}}
             _, args = validate_request(base)
             self.assertEqual((args["base"], args["head"]), ("main", "HEAD"))
+            _, args = validate_request(
+                {"operation": "gate", "args": {"repo_path": folder, "include_tests": True}}
+            )
+            self.assertTrue(args["include_tests"])
             for bad in (
                 {"head": "--help"},
                 {"base": "x" * 201},
@@ -23,6 +27,7 @@ class GateValidationTests(unittest.TestCase):
                 {"base": " -bad"},
                 {"fail_on": "severe"},
                 {"fail_on_architecture": "false"},
+                {"include_tests": "yes"},
             ):
                 with self.subTest(bad=bad), self.assertRaises(InputError):
                     validate_request({"operation": "gate", "args": {"repo_path": folder, **bad}})

@@ -8,6 +8,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from silentsec.envfile import load_env_file
 from silentsec.gate import GateFinding, GatePolicy, GateReport, GateVerdict, run_gate
 from silentsec.history import HistoryError, TimelineReport, build_timeline
 from silentsec.remediation import FindingSummary, FixVerdict, FixVerificationReport, verify_fix
@@ -245,6 +246,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Also fail on new architecture/maintainability findings (default: warn only).",
     )
+    gate.add_argument(
+        "--include-tests",
+        action="store_true",
+        help="Also gate on findings in test/sample code (tests/, fixtures/, examples/ ...).",
+    )
     gate.add_argument("--json", dest="json_path", type=Path, help="Write the gate result as JSON.")
     gate.add_argument(
         "--sarif",
@@ -329,6 +335,18 @@ def format_summary(result: RepositoryScanResult, *, top: int = 10) -> str:
         if not result.security_debt_complete:
             lines.append(
                 "Note: at least one scanner did not succeed, so this score is incomplete."
+            )
+
+        test_debt = result.test_code_debt
+        if test_debt is not None:
+            lines.append(
+                f"Test and sample code (not in score): {test_debt.unique_open_findings_count} "
+                f"issue(s), {test_debt.raw_score:.1f} points"
+            )
+        if result.scope.ignored_findings:
+            lines.append(
+                f"Excluded by .silentsecignore: {result.scope.ignored_findings} finding(s) "
+                f"(patterns: {', '.join(result.scope.ignore_patterns)})"
             )
 
         if debt.scored_findings:
@@ -740,7 +758,9 @@ def _run_gate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         print("silentsec: --timeout must be positive.", file=sys.stderr)
         return EXIT_USAGE_ERROR
     policy = GatePolicy(
-        fail_on=Severity(args.fail_on), fail_on_architecture=args.fail_on_architecture
+        fail_on=Severity(args.fail_on),
+        fail_on_architecture=args.fail_on_architecture,
+        include_tests=args.include_tests,
     )
     print(f"Scanning {args.base} and {args.head}...", file=sys.stderr)
     try:
@@ -805,6 +825,7 @@ def _run_serve(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    load_env_file()
     parser = _build_parser()
     args = parser.parse_args(argv)
 

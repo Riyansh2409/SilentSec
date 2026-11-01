@@ -29,6 +29,9 @@ BASE_POINTS: dict[Severity, int] = {
     Severity.INFO: 1,
 }
 DEFAULT_CONFIDENCE = 0.75
+# A dependency with several advisories counts a little more, but stays one issue.
+ADVISORY_COUNT_STEP = 0.1
+ADVISORY_COUNT_CAP = 1.5
 MAX_REPOSITORY_SCORE = 100.0
 ARCHITECTURE_DEBT_CAP = 25.0
 RECURRENCE_POINTS_PER_EXTRA_FILE = 2.0
@@ -213,16 +216,24 @@ def _score_finding(
     confidence_factor = 0.5 + (0.5 * confidence)
     exposure, exposure_path = _exposure_of(finding, analysis)
     exposure_factor = EXPOSURE_FACTOR if exposure == "reachable" else 1.0
-    before_exposure = round(base_points * confidence_factor, 3)
-    points = round(base_points * confidence_factor * exposure_factor, 3)
+    advisories = len(finding.advisory_ids)
+    count_factor = min(1 + ADVISORY_COUNT_STEP * max(0, advisories - 1), ADVISORY_COUNT_CAP)
+    before_exposure = round(base_points * confidence_factor * count_factor, 3)
+    points = round(base_points * confidence_factor * count_factor * exposure_factor, 3)
     confidence_source = (
         "reported" if finding.confidence is not None else "defaulted"
     )
     explanation = (
         f"{finding.severity.value.title()} severity contributes "
         f"{base_points} base points; {confidence_source} confidence "
-        f"{confidence:.2f} applies a {confidence_factor:.3f} factor, "
-        f"for {before_exposure:.3f} points."
+        f"{confidence:.2f} applies a {confidence_factor:.3f} factor"
+        + (
+            f"; {advisories} advisories for this package apply x{count_factor:.2f} "
+            f"(+{ADVISORY_COUNT_STEP:.1f} each after the first, capped at x{ADVISORY_COUNT_CAP:.1f})"
+            if count_factor > 1
+            else ""
+        )
+        + f", for {before_exposure:.3f} points."
         + _exposure_sentence(exposure, exposure_path, exposure_factor, points)
     )
     return ScoredFinding(

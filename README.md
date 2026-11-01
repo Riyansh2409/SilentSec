@@ -1,20 +1,5 @@
 # SilentSec
 
-Scan results now include `debt_views`: file/folder debt totals from deduplicated open
-findings and a bounded graph of local Python imports. The local Overview, GitHub/ZIP
-results, and offline HTML reports show top-file bars, a folder debt map, and module
-dependency neighbourhoods. Select a module to see incoming/outgoing imports; click
-a file bar or folder file entry to inspect findings in the browser.
-
-File/folder points precede architecture and repository score caps. Tests and samples
-remain included in these totals. Graph colours represent highest finding severity;
-imports alone are not security findings. Static Python imports only are supported
-(src-layout repositories cover `src/`); dynamic and third-party imports are excluded.
-The graph retains up to 60 modules and 200 edges, prioritizing modules with debt;
-omitted counts and invalid/unreadable file counts are displayed. A neighbourhood
-diagram shows 10 connections per side with full retained lists below. Folder maps
-show 30 folders; all folder totals remain in JSON. No external chart service is used.
-
 Explainable security and architectural debt intelligence for AI-assisted code.
 **Python-first:** the full pipeline is built and tested on Python repositories.
 
@@ -70,10 +55,18 @@ it from the [Gitleaks releases](https://github.com/gitleaks/gitleaks/releases)
 AI triage is optional. To enable it, copy `.env.example` to `.env` (or set the
 variables in your shell) and fill in your own keys. Never commit real keys.
 
+`.env` is loaded automatically when `silentsec` or the local frontend starts:
+
+- From the SilentSec checkout folder (next to `pyproject.toml`), or from the
+  file named by `SILENTSEC_ENV_FILE`. The current folder is **not** read,
+  because it is often the repository being scanned, which is untrusted.
+- Variables already set in your shell always win; empty values are skipped.
+- Values are never printed. The frontend only prints the names it loaded.
+
 How AI triage spends API quota:
 
-- Each finding goes to one provider at a time (Gemini primary, Gemini
-  fallback, then Groq, or the `SILENTSEC_AI_PROVIDERS` order). A timeout, connection error, or HTTP 408/429/5xx is
+- Each finding goes to one provider at a time (local Ollama, then Groq,
+  Gemini primary and Gemini fallback, or the `SILENTSEC_AI_PROVIDERS` order). A timeout, connection error, or HTTP 408/429/5xx is
   retried once on the same provider with backoff; authentication and request
   errors move straight to the next provider.
 - A scan makes at most `3 × --max-ai-findings` provider calls in total.
@@ -102,9 +95,10 @@ silentsec scan . --ai-triage
   of memory; on a CPU it works but is slow.
 - `SILENTSEC_AI_PROVIDERS` is a comma list (`ollama`, `groq`, `gemini`) that
   sets the order providers are tried in. Unknown names are an error. When it
-  is not set, the order stays Gemini primary, Gemini fallback, Groq (only those
-  with a key), and Ollama is not used. Listed cloud providers without a key
-  are skipped.
+  is not set, the default is `ollama,groq,gemini`: local Ollama first (no
+  key needed; if it is not running the scan says so and moves on), then cloud
+  providers that have a key. Listed cloud providers without a key are
+  skipped. Set `SILENTSEC_AI_PROVIDERS=ollama` to keep code on this machine.
 - `OLLAMA_HOST` (default `http://localhost:11434`), `OLLAMA_MODEL` (default
   `qwen2.5-coder:7b`) and `OLLAMA_TIMEOUT` (seconds, default 120) configure it.
   Only this machine is allowed as host (`localhost`, `127.0.0.1`, `::1`);
@@ -150,7 +144,7 @@ finding as resolved.
 | Bandit | Python security issues | Runs only when the repository has Python files. |
 | Gitleaks | Hard-coded secrets | Secret values are redacted and never sent to AI providers. |
 | Architecture analyzer | Structural debt | See below. |
-| OSV-Scanner (optional) | Known-vulnerable dependency versions | Reads `requirements*.txt`, `poetry.lock`, `uv.lock`, `package-lock.json` and other lockfiles, and checks each pinned version against the [OSV database](https://osv.dev). Needs network access to api.osv.dev. Skipped, without making the scan incomplete, when `osv-scanner` is not installed or there are no dependency files. One finding per advisory group, on the line that declares the package, with the first fixed version. |
+| OSV-Scanner (optional) | Known-vulnerable dependency versions | Reads `requirements*.txt`, `poetry.lock`, `uv.lock`, `package-lock.json` and other lockfiles, and checks each pinned version against the [OSV database](https://osv.dev). Needs network access to api.osv.dev. Skipped, without making the scan incomplete, when `osv-scanner` is not installed or there are no dependency files. One issue per vulnerable package and version (fix: upgrade it), on the line that declares the package, with the version that fixes every advisory and all advisory ids. Scored by the highest advisory severity, x1.1 per extra advisory (capped at x1.5). |
 
 Scanners never execute repository code and never write into the scanned
 repository. The bundled Semgrep rules are a focused starter set of 13 Python
@@ -195,6 +189,25 @@ The architecture analyzer detects the following patterns in Python code:
 Analysis uses Python AST parsing and does not execute repository code. Oversized files and excluded directories are skipped. Syntax errors in individual files are reported without preventing analysis of other files.
 
 Coupling-hotspot analysis and near-duplicate (similar but not identical) detection are planned capabilities, not implemented features.
+
+## Test code and .silentsecignore
+
+Test and sample code often contains deliberate "bad" code (fake keys, `eval`
+examples). SilentSec still scans it, but keeps it out of the main score:
+
+- Files under `tests/`, `test/`, `__tests__/`, `fixtures/`,
+  `sample_repositories/` or `examples/`, and files named `test_*.py`,
+  `*_test.py` or `conftest.py`, are **test and sample code**. Their issues are
+  shown in a separate, collapsed "Test and sample code" section (HTML report,
+  CLI summary, local UI) with their own points.
+- A `.silentsecignore` file in the repository root excludes paths with
+  gitignore-style globs (`vendor/`, `*.min.js`, `/build`, `docs/**/gen_*.py`,
+  `!keep.py`). The report always states how many findings were excluded, by
+  which patterns, and lists the files.
+- `silentsec gate` does not block on test-code findings unless
+  `--include-tests` is set, and it always uses the **base** branch's
+  `.silentsecignore` for both versions, so a pull request cannot hide its own
+  findings by editing the ignore file.
 
 ## Explainable Score
 
@@ -327,7 +340,8 @@ silentsec fix path\to\repository --finding FINGERPRINT --out fix.diff
   from Semgrep and Bandit) as targets.
 - Nothing is applied to your repository. `--out` saves the patch so you can
   review it and apply it yourself with `git apply`.
-- Providers are tried in order (Gemini primary, Gemini fallback, Groq); an
+- Providers are tried in the same order as triage (default Ollama, Groq,
+  Gemini); an
   invalid answer moves to the next provider.
 
 A verified AI fix is evidence, not proof, and always needs human review.
@@ -372,6 +386,23 @@ Biggest increase: df4edacf "Add settings" (+15.5)
   Incomplete scans are not stored.
 - Commits are followed along the first parent, so a merged branch counts as
   one step. In a shallow clone, older commits are missing; the output says so.
+
+## Debt views
+
+Scan results now include `debt_views`: file/folder debt totals from deduplicated open
+findings and a bounded graph of local Python imports. The local Overview, GitHub/ZIP
+results, and offline HTML reports show top-file bars, a folder debt map, and module
+dependency neighbourhoods. Select a module to see incoming/outgoing imports; click
+a file bar or folder file entry to inspect findings in the browser.
+
+File/folder points precede architecture and repository score caps. Test/sample code
+and `.silentsecignore` paths are not in these totals. Graph colours represent highest finding severity;
+imports alone are not security findings. Static Python imports only are supported
+(src-layout repositories cover `src/`); dynamic and third-party imports are excluded.
+The graph retains up to 60 modules and 200 edges, prioritizing modules with debt;
+omitted counts and invalid/unreadable file counts are displayed. A neighbourhood
+diagram shows 10 connections per side with full retained lists below. Folder maps
+show 30 folders; all folder totals remain in JSON. No external chart service is used.
 
 ## HTML Report
 

@@ -40,6 +40,18 @@ class ProviderConfigurationTests(unittest.TestCase):
         self.assertTrue(status["ai_local_only"])
         self.assertEqual(status["ai_providers"][0]["name"], "ollama")
 
+    def test_default_order_is_local_first(self):
+        with (
+            provider_env({"GROQ_API_KEY": "gsk_test"}),
+            patch(
+                "httpx.Client.send", side_effect=AssertionError("Probe must not contact a model")
+            ),
+        ):
+            status = provider_configuration()
+        self.assertEqual([p["name"] for p in status["ai_providers"]], ["ollama", "groq"])
+        self.assertEqual([p["scope"] for p in status["ai_providers"]], ["local", "external"])
+        self.assertFalse(status["ai_local_only"])
+
     def test_local_ollama_and_cloud_fallback_are_disclosed(self):
         local = SimpleNamespace(
             model="local-model", _client=SimpleNamespace(host="http://localhost:11434")
@@ -79,7 +91,8 @@ class ProviderConfigurationTests(unittest.TestCase):
                 self.assertTrue(status["ai_configuration_error"])
 
     def test_no_provider_is_not_reported_as_configured(self):
-        with provider_env({}):
+        # Only keyless cloud providers listed: nothing usable.
+        with provider_env({"SILENTSEC_AI_PROVIDERS": "groq,gemini"}):
             self.assertFalse(provider_configuration()["ai_configured"])
 
 

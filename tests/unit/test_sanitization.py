@@ -6,6 +6,12 @@ from silentsec.triage.sanitization import (
     redact_sensitive_text,
 )
 
+# Fake values built from parts so secret scanners (Gitleaks) do not flag
+# this test file as leaking real keys.
+FAKE_TOKEN = "abc123" + "def456" + "ghi789jkl"
+FAKE_GROQ_KEY = "gsk_" + "abcdefghij" + "1234567890"
+FAKE_GOOGLE_KEY = "AIza" + "SyA1234567890" + "abcdefghij"
+
 
 def make_finding(
     category: FindingCategory = FindingCategory.SECURITY,
@@ -104,3 +110,56 @@ def test_redacts_environment_variable_credentials():
 
     assert "example_aws_secret_value" not in result
     assert "db_password_value" not in result
+
+
+def test_python_expressions_are_not_redacted():
+    # Regression: `token=path.startswith(...)` was shown as `token=[REDACTED]`.
+    for code in (
+        'token=path.startswith("ghp")',
+        "secret = get_secret()",
+        "token = self.token",
+        'api_key = os.environ["API_KEY"]',
+        'auth_token=request.headers.get("Authorization")',
+        "github_token = settings.github_token",
+        "token=path.startswith(x)",
+        'password = request.form["p"]',
+        'token=os.getenv("T")',
+    ):
+        assert redact_sensitive_text(code) == code, code
+
+
+def test_bare_words_are_redacted_whatever_the_name_case():
+    # Regression: lowercase name + bare word reached cloud LLMs unredacted.
+    for text, value in (
+        ("password=hunter2", "hunter2"),
+        ("secret: s3cr3tValue", "s3cr3tValue"),
+        ("passwd=admin", "admin"),
+        ("password = password", "= password"),
+        ("PASSWORD=admin", "admin"),
+    ):
+        result = redact_sensitive_text(text)
+        assert value not in result, text
+        assert "[REDACTED]" in result, text
+
+
+def test_literal_secret_values_are_still_redacted():
+    for text, value in (
+        ('password="hunter2"', "hunter2"),
+        ("api_key=f'abc{suffix}'", "abc{suffix}"),
+        ("TOKEN=" + FAKE_TOKEN, FAKE_TOKEN),
+        ("token=12345678", "12345678"),
+        ("PASSWORD=pa$$word!", "pa$$word!"),
+        ("AWS_SECRET_ACCESS_KEY=example_aws_secret_value", "example_aws_secret_value"),
+        ("GROQ_API_KEY=" + FAKE_GROQ_KEY, FAKE_GROQ_KEY),
+        ("DB_PASSWORD=hunter2!", "hunter2!"),
+    ):
+        result = redact_sensitive_text(text)
+        assert value not in result, text
+        assert "[REDACTED" in result, text
+
+
+def test_known_prefixes_are_redacted_anywhere():
+    text = f"call({FAKE_GROQ_KEY}xyz, {FAKE_GOOGLE_KEY})"
+    result = redact_sensitive_text(text)
+    assert "gsk_" not in result
+    assert "AIza" not in result

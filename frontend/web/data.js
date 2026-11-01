@@ -17,12 +17,13 @@ export function exposureOf(finding) {
     path:Array.isArray(finding.exposure_path)?finding.exposure_path:[],
     factor:typeof finding.exposure_factor==='number'?finding.exposure_factor:null};
 }
+export function aiHasExternal(config){return (config?.ai_providers||[]).some(p=>p.scope!=='local')}
 export function aiDisclosure(config) {
   if(config?.ai_configuration_error)return 'AI configuration error: '+config.ai_configuration_error;
   const providers=config?.ai_providers||[];
   if(!providers.length)return 'AI is not configured. Set SILENTSEC_AI_PROVIDERS=ollama for local AI, or configure a cloud provider, then restart.';
   const chain=providers.map(p=>p.name+' / '+p.model+' ('+p.scope+')').join(' → ');
-  return 'Configured order: '+chain+'. '+(config.ai_local_only?'Only local providers are configured.':'This chain includes external providers: sanitized source context may leave this computer, including on fallback.')+' Availability is checked when used.';
+  return 'Configured order: '+chain+'. '+(config.ai_local_only?'Only local providers are configured.':'Warning: this chain includes external providers ('+providers.filter(p=>p.scope!=='local').map(p=>p.name).join(', ')+'). Sanitized source context may leave this computer, including on fallback. For local-only AI set SILENTSEC_AI_PROVIDERS=ollama and restart.')+' Availability is checked when used.';
 }
 
 export function scoredView(item) {
@@ -46,4 +47,15 @@ export function triageAttributionText(value) {
   const name=value.provider+(value.model?' / '+value.model:' / model unknown');
   const locality=value.local===true?'local':value.local===false?'external':'locality unknown';
   return 'Answered by: '+name+' · '+locality+' · '+(value.cached?'cached result':'fresh result');
+}
+
+// "Copy as path" on Windows wraps the folder in quotes; drop one matching pair.
+export function cleanRepoPath(value){let v=String(value??'').trim();if(v.length>=2&&v[0]===v[v.length-1]&&(v[0]==='"'||v[0]==="'"))v=v.slice(1,-1).trim();return v}
+// Plain sentences about what was kept out of the main score (mirrors ScopeSummary.lines).
+export function scopeLines(scope){
+ if(!scope)return [];const out=[];
+ if(scope.test_code_findings)out.push(`${scope.test_code_findings} finding(s) in ${scope.test_code_file_count} test or sample file(s) are shown separately and not counted in the main score.`);
+ if(scope.ignored_findings)out.push(`${scope.ignored_findings} finding(s) in ${(scope.ignored_files||[]).length+(scope.ignored_files_truncated||0)} file(s) were excluded by .silentsecignore (patterns: ${(scope.ignore_patterns||[]).join(', ')}).`);
+ else if(scope.ignore_file_present)out.push('.silentsecignore is present but excluded no findings.');
+ return out;
 }

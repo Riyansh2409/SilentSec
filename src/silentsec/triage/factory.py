@@ -6,7 +6,7 @@ from .cache import TriageCache, default_cache
 from .gemini_provider import GeminiTriageProvider
 from .groq_provider import GroqTriageProvider
 from .ollama_provider import OllamaTriageProvider
-from .providers import TriageProvider, configured_provider_order
+from .providers import DEFAULT_PROVIDER_ORDER, TriageProvider, configured_provider_order
 from .router import TriageRouter
 
 # Production defaults: one bounded retry for transient errors per provider.
@@ -72,8 +72,7 @@ _BUILDERS = {
     "groq": _groq_providers,
     "ollama": _ollama_providers,
 }
-# Without SILENTSEC_AI_PROVIDERS: today's order, only providers with keys.
-DEFAULT_ORDER = ("gemini", "groq")
+DEFAULT_ORDER = DEFAULT_PROVIDER_ORDER
 
 
 def build_default_providers() -> list[tuple[str, TriageProvider]]:
