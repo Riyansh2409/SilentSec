@@ -21,6 +21,20 @@ from .models import (
     now,
 )
 
+# Passed to a scanner child only for explicit AI jobs (triage or fix).
+AI_ENVIRONMENT = (
+    "GEMINI_API_KEY",
+    "GROQ_API_KEY",
+    "GROQ_MODEL",
+    "GEMINI_PRIMARY_MODEL",
+    "GEMINI_FALLBACK_MODEL",
+    "SILENTSEC_AI_PROVIDERS",
+    "OLLAMA_HOST",
+    "OLLAMA_MODEL",
+    "OLLAMA_TIMEOUT",
+    "SILENTSEC_OLLAMA_ALLOW_REMOTE",
+)
+
 
 def scanner_path():
     tools = Path(__file__).resolve().parents[3] / "frontend" / ".tools"
@@ -111,16 +125,7 @@ def _execute(factory, settings, claim, stop=None):
             ):
                 # Explicit opt-in jobs only; never hand platform/database/session
                 # credentials to a scanner child.
-                for name in (
-                    "GEMINI_API_KEY",
-                    "GROQ_API_KEY",
-                    "GEMINI_PRIMARY_MODEL",
-                    "GEMINI_FALLBACK_MODEL",
-                    "SILENTSEC_AI_PROVIDERS",
-                    "OLLAMA_HOST",
-                    "OLLAMA_MODEL",
-                    "SILENTSEC_ALLOW_REMOTE_OLLAMA",
-                ):
+                for name in AI_ENVIRONMENT:
                     if name in os.environ:
                         env[name] = os.environ[name]
                 env["SILENTSEC_TRIAGE_CACHE_DIR"] = str(Path(request["cache"]) / "triage")

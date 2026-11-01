@@ -10,6 +10,8 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import delete, select
 
+from silentsec.envfile import load_env_file
+
 from . import billing, worker
 from .config import Settings
 from .db import audit, database, lock_org
@@ -154,6 +156,9 @@ def main():
             "Local-only development credentials: .platform/dev-settings.json (do not share or commit)."
         )
         return
+    # Optional AI keys and Ollama settings from the checkout's .env (shell
+    # variables win). Children get them only for explicit AI jobs (worker.py).
+    load_env_file()
     settings = Settings()
     if args.command == "init-db":
         migrate(settings)

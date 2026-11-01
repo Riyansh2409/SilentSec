@@ -229,8 +229,7 @@ function renderNativeVerify(view){
 
 function exposureBadge(finding){
  const exposure=exposureOf(finding);
- if(api.platform){titles.usage=['Usage & billing.','Credits, separately named allowances, and the immutable usage record.'];titles.account=['Your account & team.','Manage organization members, scoped keys and audit events.'];}
-const labels={usage:'Usage & billing',account:'Account & team',reachable:'Reachable in code',not_reachable:'No detected entry-point path',unknown:'Exposure unknown'};
+ const labels={reachable:'Reachable in code',not_reachable:'No detected entry-point path',unknown:'Exposure unknown'};
  return el('span','badge exposure-'+exposure.state,labels[exposure.state]);
 }
 function exposurePanel(finding,limitations){
