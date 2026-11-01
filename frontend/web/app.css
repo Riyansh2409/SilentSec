@@ -10,3 +10,5 @@
 .split-tabs{flex-wrap:wrap}.gate-verdict h2{font-size:28px}.gate-verdict.pass h2{color:var(--green)}.gate-verdict.fail h2{color:var(--pink)}.gate-verdict.incomplete h2{color:var(--amber)}
 
 .exposure-reachable{color:var(--amber);border-color:#ecc58c50}.exposure-not_reachable,.exposure-unknown{color:var(--muted);border-color:var(--line)}.finding-button+.badge,.badge+.badge{margin:8px 7px 0 0}
+
+.debt-file{display:block;width:100%;text-align:left;background:transparent;border:0;border-bottom:1px solid var(--line);padding:12px 0}.debt-file>span{display:block}.debt-track{height:12px;background:#aaa5bd16;border-radius:4px;margin-top:7px}.debt-fill{display:block;height:12px;border-radius:4px}.debt-folders{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-bottom:25px}.debt-folder{border:2px solid;border-radius:8px;padding:12px;margin:0;overflow-wrap:anywhere}.debt-folder button{display:block}.dependency-canvas{overflow:auto;margin:20px 0}.dependency-canvas svg{width:100%;min-width:650px}.debt-views select{max-width:100%}

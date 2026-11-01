@@ -454,6 +454,7 @@ class Handler(BaseHTTPRequestHandler):
                 "/app.js": "app.js",
                 "/api.js": "api.js",
                 "/data.js": "data.js",
+                "/debt-views.js": "debt-views.js",
             }
             filename = files.get(path)
             if not filename or not (ROOT / "web" / filename).is_file():

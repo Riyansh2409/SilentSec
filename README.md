@@ -1,5 +1,20 @@
 # SilentSec
 
+Scan results now include `debt_views`: file/folder debt totals from deduplicated open
+findings and a bounded graph of local Python imports. The local Overview, GitHub/ZIP
+results, and offline HTML reports show top-file bars, a folder debt map, and module
+dependency neighbourhoods. Select a module to see incoming/outgoing imports; click
+a file bar or folder file entry to inspect findings in the browser.
+
+File/folder points precede architecture and repository score caps. Tests and samples
+remain included in these totals. Graph colours represent highest finding severity;
+imports alone are not security findings. Static Python imports only are supported
+(src-layout repositories cover `src/`); dynamic and third-party imports are excluded.
+The graph retains up to 60 modules and 200 edges, prioritizing modules with debt;
+omitted counts and invalid/unreadable file counts are displayed. A neighbourhood
+diagram shows 10 connections per side with full retained lists below. Folder maps
+show 30 folders; all folder totals remain in JSON. No external chart service is used.
+
 Explainable security and architectural debt intelligence for AI-assisted code.
 **Python-first:** the full pipeline is built and tested on Python repositories.
 

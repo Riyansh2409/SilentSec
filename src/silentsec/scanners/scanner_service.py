@@ -7,6 +7,7 @@ from time import perf_counter
 from pydantic import BaseModel, Field
 
 from silentsec.architecture.analyzer import run_architecture_analyzer
+from silentsec.architecture.debt_views import DebtViews, build_debt_views
 from silentsec.context import build_source_context
 from silentsec.languages import detect_languages
 from silentsec.schemas import Finding
@@ -68,6 +69,7 @@ class RepositoryScanResult(BaseModel):
     duration_seconds: float = Field(ge=0)
     errors: list[str] = Field(default_factory=list)
     security_debt: SecurityDebtReport | None = None
+    debt_views: DebtViews | None = None
     security_debt_complete: bool = False
     triage_results: list[TriageResult] = Field(default_factory=list)
     triage_attempted: bool = False
@@ -347,6 +349,7 @@ def scan_repository(
         duration_seconds=round(perf_counter() - started, 3),
         errors=errors,
         security_debt=debt_report,
+        debt_views=build_debt_views(debt_report, root),
         security_debt_complete=security_debt_complete,
         triage_results=triage_results,
         triage_attempted=triage_attempted,
