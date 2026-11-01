@@ -114,10 +114,26 @@ def test_python_expressions_are_not_redacted():
         "token = self.token",
         'api_key = os.environ["API_KEY"]',
         'auth_token=request.headers.get("Authorization")',
-        "password = password",
         "github_token = settings.github_token",
+        "token=path.startswith(x)",
+        'password = request.form["p"]',
+        'token=os.getenv("T")',
     ):
         assert redact_sensitive_text(code) == code, code
+
+
+def test_bare_words_are_redacted_whatever_the_name_case():
+    # Regression: lowercase name + bare word reached cloud LLMs unredacted.
+    for text, value in (
+        ("password=hunter2", "hunter2"),
+        ("secret: s3cr3tValue", "s3cr3tValue"),
+        ("passwd=admin", "admin"),
+        ("password = password", "= password"),
+        ("PASSWORD=admin", "admin"),
+    ):
+        result = redact_sensitive_text(text)
+        assert value not in result, text
+        assert "[REDACTED]" in result, text
 
 
 def test_literal_secret_values_are_still_redacted():
