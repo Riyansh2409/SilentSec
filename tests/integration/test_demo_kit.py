@@ -48,8 +48,10 @@ def test_kit_refuses_a_non_empty_folder(demo: Path):
 
 
 @pytest.mark.skipif(
-    shutil.which("semgrep") is None or shutil.which("bandit") is None,
-    reason="needs the real Semgrep and Bandit",
+    shutil.which("semgrep") is None
+    or shutil.which("bandit") is None
+    or shutil.which("gitleaks") is None,
+    reason="needs the real Semgrep, Bandit and Gitleaks",
 )
 def test_demo_gate_results_with_real_scanners(demo: Path):
     bad = run_gate(demo, base="main", head="feature/bad-fix")

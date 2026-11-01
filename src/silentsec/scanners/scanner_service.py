@@ -340,6 +340,12 @@ def scan_repository(
             triage_cache_hits = getattr(cache, "hits", 0) if cache is not None else 0
             triage_provider_calls = getattr(router, "provider_calls", 0)
 
+    debt_views: DebtViews | None = None
+    try:
+        debt_views = build_debt_views(debt_report, root)
+    except Exception as exc:  # noqa: BLE001 - optional view must not fail the scan
+        errors.append(f"Debt visualization skipped: {type(exc).__name__}")
+
     return RepositoryScanResult(
         repo_path=str(root),
         languages=language_report.languages,
@@ -349,7 +355,7 @@ def scan_repository(
         duration_seconds=round(perf_counter() - started, 3),
         errors=errors,
         security_debt=debt_report,
-        debt_views=build_debt_views(debt_report, root),
+        debt_views=debt_views,
         security_debt_complete=security_debt_complete,
         triage_results=triage_results,
         triage_attempted=triage_attempted,
