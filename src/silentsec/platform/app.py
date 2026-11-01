@@ -285,7 +285,15 @@ def create_app(settings: Settings | None = None):
 
     @app.get("/original/{asset}", include_in_schema=False)
     def original_asset(asset: str):
-        if asset not in {"app.js", "app.css", "api.js", "data.js", "account.js", "account.css"}:
+        if asset not in {
+            "app.js",
+            "app.css",
+            "api.js",
+            "data.js",
+            "debt-views.js",
+            "account.js",
+            "account.css",
+        }:
             raise HTTPException(404, "Asset not found.")
         return FileResponse(original / asset)
 

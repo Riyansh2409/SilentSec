@@ -248,6 +248,8 @@ function showFileFindings(entry,path){
  const items=entry.data.issues?entry.data.issues.map(nativeIssueView):logicalFindings(entry.data);
  detail.append(findingTable(items.filter(f=>f.file_path.replaceAll('\\','/')===path.replaceAll('\\','/')),entry));
  $('finding-dialog').showModal();
+}
+
 function scopePanel(d,entry){
  const lines=scopeLines(d.scope);if(!lines.length)return null;
  const p=panel('Not in the score');for(const line of lines)p.append(note(line));
