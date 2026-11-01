@@ -32,8 +32,9 @@ def _alive(pid: int) -> bool:
     if status.exists():  # Linux: a killed but not yet reaped process is a zombie
         try:
             return "\nState:\tZ" not in status.read_text()
-        except FileNotFoundError:
-            # The process may be reaped between exists() and read_text().
+        except (FileNotFoundError, ProcessLookupError):
+            # The process may be reaped between exists() and read_text();
+            # Linux reports that as ENOENT or ESRCH depending on timing.
             return False
     try:
         os.kill(pid, 0)
@@ -98,8 +99,9 @@ def test_timeout_kills_the_whole_process_tree(tmp_path: Path):
         ("Name:\tpython\nState:\tS (sleeping)\n", True),
         ("Name:\tpython\nState:\tZ (zombie)\n", False),
         (FileNotFoundError("process was reaped"), False),
+        (ProcessLookupError(3, "No such process"), False),
     ],
-    ids=["running", "zombie", "reaped-during-status-read"],
+    ids=["running", "zombie", "reaped-during-status-read", "reaped-esrch-during-status-read"],
 )
 def test_alive_handles_linux_process_states(monkeypatch, contents, expected):
     module = sys.modules[__name__]
